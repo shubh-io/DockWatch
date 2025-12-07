@@ -553,7 +553,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				containerID := m.containers[m.cursor].ID
 				m.message = "Opening interactive shell..."
 				// Use bash to clear terminal and exec into container shell
-				cmdStr := fmt.Sprintf("echo '# you are in terminal'; exec docker exec -it %s /bin/sh", containerID)
+				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec docker exec -it %s /bin/sh", containerID)
 				c := exec.Command("bash", "-lc", cmdStr)
 				return m, tea.ExecProcess(c, func(err error) tea.Msg {
 					if err != nil {

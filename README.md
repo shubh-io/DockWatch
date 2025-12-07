@@ -16,7 +16,7 @@ A terminal-based Docker container manager that actually ***works***.
 </div>
 
 
-![dockwatch screenshot](screenshot.png)
+![dockwatch demo gif](demo.gif)
 
 ## What is this?
 
