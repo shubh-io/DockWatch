@@ -16,14 +16,16 @@ import (
 
 // Container holds all the data we show in the TUI
 type Container struct {
-	ID     string   // short container id
-	Names  []string // can have multiple names
-	Image  string   // image name like "nginx:latest"
-	Status string   // human readable status
-	State  string   // running/exited/etc
-	Memory string   // mem usage %
-	CPU    string   // cpu usage %
-	PIDs   string   // process count
+	ID      string   // short container id
+	Names   []string // can have multiple names
+	Image   string   // image name like "nginx:latest"
+	Status  string   // human readable status
+	State   string   // running/exited/etc
+	Memory  string   // mem usage %
+	CPU     string   // cpu usage %
+	PIDs    string   // process count
+	NetIO   string   // network I/O
+	BlockIO string   // block I/O
 }
 
 // sent when we finish fetching the container list
@@ -45,7 +47,7 @@ type logsMsg struct {
 
 // grab cpu/mem/pids for a container
 // returns empty strings on error so we don't block the UI
-func GetContainerStats(containerID string) (cpu string, mem string, pids string, err error) {
+func GetContainerStats(containerID string) (cpu string, mem string, pids string, NetIO string, BlockIO string, err error) {
 	// 3 sec timeout because some containers are weird and hang
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -56,7 +58,7 @@ func GetContainerStats(containerID string) (cpu string, mem string, pids string,
 	output, err := cmd.Output()
 	if err != nil {
 		// timeout or error, just bail
-		return "", "", "", err
+		return "", "", "", "", "", err
 	}
 
 	// docker stats returns json like this
@@ -64,15 +66,17 @@ func GetContainerStats(containerID string) (cpu string, mem string, pids string,
 		CPUPerc string `json:"CPUPerc"`
 		MemPerc string `json:"MemPerc"`
 		PIDs    string `json:"PIDs"`
+		NetIO   string `json:"NetIO"`
+		BlockIO string `json:"BlockIO"`
 	}
 
 	// parse it
 	var s statsEntry
 	if err := json.Unmarshal(output, &s); err != nil {
-		return "", "", "", err
+		return "", "", "", "", "", err
 	}
 
-	return s.CPUPerc, s.MemPerc, s.PIDs, nil
+	return s.CPUPerc, s.MemPerc, s.PIDs, s.NetIO, s.BlockIO, nil
 }
 
 // ============================================================================
@@ -196,12 +200,14 @@ func ListContainersUsingCLI() ([]Container, error) {
 
 		// get live stats if container is running
 		if e.State == "running" {
-			cpu, mem, pids, err := GetContainerStats(e.ID)
+			cpu, mem, pids, netio, blockio, err := GetContainerStats(e.ID)
 			if err == nil {
 				// only set if we got them
 				container.CPU = cpu
 				container.Memory = mem
 				container.PIDs = pids
+				container.NetIO = netio
+				container.BlockIO = blockio
 			}
 		}
 

@@ -138,7 +138,7 @@ type model struct {
 	sortBy         sortColumn  // which column to sort by
 	sortAsc        bool        // sort direction
 	columnMode     bool        // column nav mode (vs row nav)
-	selectedColumn int         // selected column (0-7)
+	selectedColumn int         // selected column (0-8)
 }
 
 // which column to sort by
@@ -149,6 +149,7 @@ const (
 	sortByName
 	sortByMemory
 	sortByCPU
+	sortByNetIO
 	sortByImage
 	sortByStatus
 	sortByState
@@ -170,7 +171,7 @@ func initialModel() model {
 		sortBy:         sortByState, // sort by state
 		sortAsc:        false,       // descending
 		columnMode:     false,       // row nav mode
-		selectedColumn: 6,           // state column
+		selectedColumn: 7,           // state column (adjusted for new NET I/O column)
 	}
 }
 
@@ -282,6 +283,12 @@ func (m *model) sortContainers() {
 			pidsI, _ := strconv.Atoi(m.containers[i].PIDs)
 			pidsJ, _ := strconv.Atoi(m.containers[j].PIDs)
 			less = pidsI < pidsJ
+		case sortByNetIO:
+			// compare total network I/O (rx+tx) as bytes
+			netI := parseNetIO(m.containers[i].NetIO)
+			netJ := parseNetIO(m.containers[j].NetIO)
+			less = netI < netJ
+
 		}
 
 		// flip for descending
@@ -297,6 +304,82 @@ func parsePercent(s string) float64 {
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, "%")
 	val, _ := strconv.ParseFloat(s, 64)
+	return val
+}
+
+// parseNetIO parses a string like "1.2kB / 3.4kB" and returns total bytes
+func parseNetIO(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "─" {
+		return 0
+	}
+	parts := strings.Split(s, "/")
+	if len(parts) == 0 {
+		return 0
+	}
+	total := 0.0
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		v := parseSize(p)
+		total += v
+	}
+	return total
+}
+
+// parseSize parses a human-readable size like "1.2kB" or "3MiB" into bytes.
+func parseSize(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	// remove possible commas
+	s = strings.ReplaceAll(s, ",", "")
+	// split number and unit
+	num := ""
+	unit := ""
+	for i, r := range s {
+		if (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			num += string(r)
+		} else {
+			unit = strings.TrimSpace(s[i:])
+			break
+		}
+	}
+	if num == "" {
+		return 0
+	}
+	val, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0
+	}
+	unit = strings.ToLower(strings.TrimSpace(unit))
+	switch unit {
+	case "b", "bytes", "byte", "":
+		return val
+	case "kb", "kib":
+		return val * 1000
+	case "mb", "mib":
+		return val * 1000 * 1000
+	case "gb", "gib":
+		return val * 1000 * 1000 * 1000
+	default:
+		// fallback: if unit ends with b (e.g., kB) treat as *1000
+		if strings.HasSuffix(unit, "b") {
+			prefix := strings.TrimSuffix(unit, "b")
+			if prefix == "k" {
+				return val * 1000
+			}
+			if prefix == "m" {
+				return val * 1000 * 1000
+			}
+			if prefix == "g" {
+				return val * 1000 * 1000 * 1000
+			}
+		}
+	}
 	return val
 }
 
@@ -341,7 +424,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		logsRows := 0
 		if m.showLogs {
-			logsRows = 8
+			logsRows = 12
 		}
 		availableRows := m.height - headerRows - footerRows - logsRows - 1
 		if availableRows < 3 {
@@ -390,6 +473,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		// time to refresh
+		// always refresh container list, if logs panel is open, also refresh logs
+		if m.showLogs && m.logsContainer != "" {
+			return m, tea.Batch(fetchContainers(), tickCmd(), fetchLogsCmd(m.logsContainer))
+		}
 		return m, tea.Batch(fetchContainers(), tickCmd())
 
 	case tea.KeyMsg:
@@ -423,12 +510,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 3:
 					col = sortByCPU
 				case 4:
-					col = sortByImage
+					col = sortByNetIO
 				case 5:
-					col = sortByStatus
+					col = sortByImage
 				case 6:
-					col = sortByState
+					col = sortByStatus
 				case 7:
+					col = sortByState
+				case 8:
 					col = sortByPIDs
 				}
 
@@ -446,7 +535,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.sortAsc {
 					dir = "desc"
 				}
-				colNames := []string{"ID", "Name", "Memory", "CPU", "Image", "Status", "State", "PIDs"}
+				colNames := []string{"ID", "Name", "Memory", "CPU", "NET I/O", "Image", "Status", "State", "PIDs"}
 				m.message = fmt.Sprintf("Sorted by %s (%s)", colNames[m.selectedColumn], dir)
 			}
 			return m, nil
@@ -463,7 +552,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right", "l":
 			// In column mode, move selection right
 			if m.columnMode {
-				if m.selectedColumn < 7 { // 0-7 for 8 columns
+				if m.selectedColumn < 8 { // 0-8 for 9 columns
 					m.selectedColumn++
 				}
 				return m, nil
@@ -626,29 +715,90 @@ func (m model) View() string {
 
 	// table header
 
-	// column widths - scale proportionally with screen width
-	// use percentages of available width for better responsiveness
-	usableWidth := width - 10              // account for padding and separators
-	idW := max(12, usableWidth*12/100)     // ~12%
-	nameW := max(15, usableWidth*18/100)   // ~18%
-	memoryW := max(10, usableWidth*10/100) // ~10%
-	cpuW := max(7, usableWidth*7/100)      // ~7%
-	imageW := max(20, usableWidth*23/100)  // ~23%
-	statusW := max(12, usableWidth*14/100) // ~14%
-	stateW := max(8, usableWidth*8/100)    // ~8%
-	pidsW := max(5, usableWidth*8/100)     // ~8%
+	// column widths - compute with smart allocation to prevent overflow
+	usableWidth := width - 15 // account for padding and separators (10 columns = ~10 separators)
 
-	// on very small screens, prioritize essential columns
-	if width < 100 {
-		idW = 12
-		nameW = 15
-		memoryW = 8
-		cpuW = 6
-		imageW = 18
-		statusW = 12
-		stateW = 8
-		pidsW = max(4, width-idW-nameW-memoryW-cpuW-imageW-statusW-stateW-8)
+	// define minimum widths and relative weights for each column
+	type colSpec struct {
+		min    int
+		weight int
 	}
+
+	specs := []colSpec{
+		{12, 12}, // ID
+		{15, 15}, // NAME
+		{8, 8},   // MEMORY
+		{6, 6},   // CPU
+		{10, 10}, // NET I/O
+		{15, 15}, // Disk I/O
+		{15, 18}, // IMAGE
+		{12, 12}, // STATUS
+		{8, 8},   // STATE
+		{5, 6},   // PIDs
+	}
+
+	// compute total weight
+	totalWeight := 0
+	for _, spec := range specs {
+		totalWeight += spec.weight
+	}
+
+	// allocate widths proportionally, respecting minimums
+	widths := make([]int, len(specs))
+	allocated := 0
+	for i, spec := range specs {
+		// proportional allocation
+		desired := (usableWidth * spec.weight) / totalWeight
+		widths[i] = max(spec.min, desired)
+		allocated += widths[i]
+	}
+
+	// if we exceeded usableWidth, shrink columns proportionally (keeping minimums)
+	if allocated > usableWidth {
+		excess := allocated - usableWidth
+		// calculate how much slack each column has
+		totalSlack := 0
+		for i, spec := range specs {
+			slack := widths[i] - spec.min
+			if slack > 0 {
+				totalSlack += slack
+			}
+		}
+
+		if totalSlack > 0 {
+			// reduce each column proportionally to its slack
+			for i, spec := range specs {
+				slack := widths[i] - spec.min
+				if slack > 0 {
+					reduce := (slack * excess) / totalSlack
+					widths[i] -= reduce
+				}
+			}
+		} else {
+			// fallback: all at minimums already, force fit by reducing each slightly
+			reduction := excess / len(specs)
+			remainder := excess % len(specs)
+			for i := range widths {
+				widths[i] = max(specs[i].min-1, widths[i]-reduction)
+				if remainder > 0 && widths[i] > specs[i].min-1 {
+					widths[i]--
+					remainder--
+				}
+			}
+		}
+	}
+
+	// assign to individual variables
+	idW := widths[0]
+	nameW := widths[1]
+	memoryW := widths[2]
+	cpuW := widths[3]
+	netIOW := widths[4]
+	blockIOW := widths[5]
+	imageW := widths[6]
+	statusW := widths[7]
+	stateW := widths[8]
+	pidsW := widths[9]
 
 	// sort indicator (▲/▼)
 	sortIndicator := func(col sortColumn) string {
@@ -679,20 +829,21 @@ func (m model) View() string {
 		return text
 	}
 
-	// build all 8 columns
+	// build all 10 columns (added NET I/O)
 	col0 := buildColumn(0, "CONTAINER ID", idW, sortIndicator(sortByID))
 	col1 := buildColumn(1, "NAME", nameW, sortIndicator(sortByName))
 	col2 := buildColumn(2, "MEMORY", memoryW, sortIndicator(sortByMemory))
 	col3 := buildColumn(3, "CPU", cpuW, sortIndicator(sortByCPU))
-	col4 := buildColumn(4, "IMAGE", imageW, sortIndicator(sortByImage))
-	col5 := buildColumn(5, "STATUS", statusW, sortIndicator(sortByStatus))
-	col6 := buildColumn(6, "STATE", stateW, sortIndicator(sortByState))
-	col7 := buildColumn(7, "PIDs", pidsW, sortIndicator(sortByPIDs))
+	col4 := buildColumn(4, "NET I/O", netIOW, sortIndicator(sortByNetIO))
+	col5 := buildColumn(5, "Disk I/O", blockIOW, "") // no sort for Disk I/O
+	col6 := buildColumn(6, "IMAGE", imageW, sortIndicator(sortByImage))
+	col7 := buildColumn(7, "STATUS", statusW, sortIndicator(sortByStatus))
+	col8 := buildColumn(8, "STATE", stateW, sortIndicator(sortByState))
+	col9 := buildColumn(9, "PIDs", pidsW, sortIndicator(sortByPIDs))
 
 	// combine into header
-	hdr := fmt.Sprintf(" %s│ %s│ %s│ %s│ %s│ %s│ %s│ %s",
-		col0, col1, col2, col3, col4, col5, col6, col7)
-
+	hdr := fmt.Sprintf(" %s│ %s│ %s│ %s│ %s│ %s│ %s│ %s│ %s│ %s",
+		col0, col1, col2, col3, col4, col5, col6, col7, col8, col9)
 	// pad header
 	if len(hdr) < width {
 		hdr += strings.Repeat(" ", width-len(hdr))
@@ -712,11 +863,11 @@ func (m model) View() string {
 	if m.showLogs {
 		// adapt logs panel size to screen height
 		if m.height < 30 {
-			logsRows = 5 // smaller on tiny screens
+			logsRows = 12 // smaller on tiny screens
 		} else if m.height < 40 {
-			logsRows = 6
+			logsRows = 15
 		} else {
-			logsRows = 8
+			logsRows = 18
 		}
 	}
 	containerRowsAvailable := m.height - headerRows - footerRows - logsRows - 1
@@ -740,7 +891,7 @@ func (m model) View() string {
 	rowsRendered := 0
 	for i := startIdx; i < endIdx; i++ {
 		c := m.containers[i]
-		row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, imageW, statusW, stateW, pidsW, width)
+		row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, stateW, pidsW, width)
 		b.WriteString(row)
 		b.WriteString("\n")
 		rowsRendered++
@@ -953,9 +1104,53 @@ func visibleLen(s string) int {
 	return count
 }
 
+// truncateToWidth truncates a string to fit within the given visible width
+// preserving ANSI codes and adding ellipsis if truncated
+func truncateToWidth(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+
+	visLen := visibleLen(s)
+	if visLen <= width {
+		return s
+	}
+
+	// need to truncate - account for ellipsis
+	targetWidth := width - 1
+	if targetWidth < 1 {
+		return "…"
+	}
+
+	// walk through string counting visible chars
+	visCount := 0
+	inEscape := false
+	result := ""
+
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			result += string(r)
+		} else if inEscape {
+			result += string(r)
+			if r == 'm' {
+				inEscape = false
+			}
+		} else {
+			if visCount >= targetWidth {
+				break
+			}
+			result += string(r)
+			visCount++
+		}
+	}
+
+	return result + "…"
+}
+
 // render one container row
 // applies styles based on selection and state
-func (m model) renderContainerRow(c Container, selected bool, idW, nameW, memoryW, cpuW, imageW, statusW, stateW, pidsW, totalWidth int) string {
+func (m model) renderContainerRow(c Container, selected bool, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, stateW, pidsW, totalWidth int) string {
 	// get name from names array
 	name := ""
 	if len(c.Names) > 0 {
@@ -984,12 +1179,39 @@ func (m model) renderContainerRow(c Container, selected bool, idW, nameW, memory
 		state = state[:stateW-2]
 	}
 
+	// net IO
+	netio := c.NetIO
+	if netio == "" {
+		netio = "─"
+	}
+	if visibleLen(netio) > netIOW-2 {
+		// truncate to fit with ellipsis
+		netio = truncateToWidth(netio, netIOW-2)
+	}
+
+	// block IO
+	blockio := c.BlockIO
+	if blockio == "" {
+		blockio = "─"
+	}
+	if visibleLen(blockio) > blockIOW-2 {
+		blockio = truncateToWidth(blockio, blockIOW-2)
+	}
+
 	// placeholder for empty stuff
 	mem := c.Memory
 	if mem == "" {
 		mem = "─"
 	}
+	if visibleLen(mem) > memoryW-2 {
+		mem = truncateToWidth(mem, memoryW-2)
+	}
+
 	cpu := c.CPU
+	if visibleLen(cpu) > cpuW-1 {
+		// truncate to fit with ellipsis
+		cpu = truncateToWidth(cpu, cpuW-1)
+	}
 	if cpu == "" {
 		cpu = "─"
 	}
@@ -997,13 +1219,18 @@ func (m model) renderContainerRow(c Container, selected bool, idW, nameW, memory
 	if pids == "" {
 		pids = "─"
 	}
+	if visibleLen(pids) > pidsW-1 {
+		pids = truncateToWidth(pids, pidsW-1)
+	}
 
-	// Format row
-	row := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
+	// Format row (include NET I/O between CPU and IMAGE)
+	row := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
 		idW-1, id,
 		nameW-1, name,
 		memoryW-1, mem,
 		cpuW-1, cpu,
+		netIOW-1, netio,
+		blockIOW-1, blockio,
 		imageW-1, img,
 		statusW-1, status,
 		stateW-1, state,
