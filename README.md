@@ -1,22 +1,24 @@
 <div align="center">
 
-# DockWatch 💻
+# DockMate 🐳
 A terminal-based Docker container manager that actually ***works***.
 
 ---
 
 <!-- Badges -->
-![WakaTime](https://wakatime.com/badge/github/shubh-io/DockWatch.svg)
-![GitHub Stars](https://img.shields.io/github/stars/shubh-io/DockWatch)
-![License](https://img.shields.io/github/license/shubh-io/Dockwatch)
-![Pull Requests](https://img.shields.io/github/issues-pr/shubh-io/DockWatch)
-![Last Commit](https://img.shields.io/github/last-commit/shubh-io/DockWatch)
-![Repo Size](https://img.shields.io/github/repo-size/shubh-io/DockWatch)
+![WakaTime](https://wakatime.com/badge/github/shubh-io/DockMate.svg)
+![GitHub Stars](https://img.shields.io/github/stars/shubh-io/DockMate)
+![License](https://img.shields.io/github/license/shubh-io/DockMate)
+![Pull Requests](https://img.shields.io/github/issues-pr/shubh-io/DockMate)
+![Last Commit](https://img.shields.io/github/last-commit/shubh-io/DockMate)
+![Repo Size](https://img.shields.io/github/repo-size/shubh-io/DockMate)
 
 </div>
 
+**Note:** Renamed from _DockWatch_ to avoid confusion with existing project
 
-![dockwatch demo gif](demo.gif)
+
+![DockMate demo gif](demo.gif)
 
 ## What is this?
 
@@ -45,23 +47,23 @@ Tired of typing `docker ps` a million times? me too. This is a simple TUI (text 
 
 ```
 # clone the repo
-git clone https://github.com/shubh-io/dockwatch
-cd dockwatch
+git clone https://github.com/shubh-io/dockmate
+cd dockmate
 
 # build it
-go build -o dockwatch
+go build -o dockmate
 
 # run it
-./dockwatch
+./dockmate
 
 # optional: install globally
-sudo mv dockwatch /usr/local/bin/
+sudo mv dockmate /usr/local/bin/
 ```
 
 ## Usage
 
 ```
-dockwatch
+DockMate
 ```
 
 That's it. Navigate with arrows, press keys to manage containers.

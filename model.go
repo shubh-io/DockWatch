@@ -968,7 +968,7 @@ func (m model) View() string {
 
 // render centered title bar
 func (m model) renderTitleBar(width int) string {
-	appName := appNameStyle.Render("┌─ DockWatch ─┐")
+	appName := appNameStyle.Render("┌─ DockMate ─┐")
 
 	// center it
 	padding := (width - visibleLen(appName)) / 2

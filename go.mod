@@ -1,4 +1,4 @@
-module github.com/shubh-io/dockwatch
+module github.com/shubh-io/dockmate
 
 go 1.24.0
 
