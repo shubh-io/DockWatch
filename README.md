@@ -63,7 +63,7 @@ sudo mv dockmate /usr/local/bin/
 ## Usage
 
 ```
-DockMate
+dockmate
 ```
 
 That's it. Navigate with arrows, press keys to manage containers.
