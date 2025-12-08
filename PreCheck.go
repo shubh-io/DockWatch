@@ -87,6 +87,29 @@ func isDockerInActiveGroups() (bool, error) {
 	return false, nil
 }
 
+func checkDockerSocketPermissions() (hasAccess bool, errorMsg string) {
+	socketPath := "/var/run/docker.sock"
+
+	// check if socket exists
+	_, err := os.Stat(socketPath)
+	if err != nil {
+		return false, "Docker socket not found at /var/run/docker.sock"
+	}
+
+	// try to access the socket with read and write flags(os.O_RDWR)
+	file, err := os.OpenFile(socketPath, os.O_RDWR, 0)
+	if err != nil {
+		if os.IsPermission(err) {
+			return false, fmt.Sprintf("Socket exists but insufficient permissions: %v", err)
+		}
+		return false, fmt.Sprintf("Cannot access socket: %v", err)
+	}
+	//close the file
+	file.Close()
+
+	return true, ""
+}
+
 // check if docker is installed
 
 func checkDockerInstalled() PreCheckResult {
@@ -115,9 +138,7 @@ func checkDockerDaemon() PreCheckResult {
 
 	stderrOutput := stderr.String()
 
-	// IMPORTANT: Check daemon status FIRST before permission issues
-	// when daemon is stopped, socket may exist but return "permission denied"
-	// Check if daemon is actually running
+	// Check daemon status FIRST
 	if strings.Contains(stderrOutput, "Is the docker daemon running") ||
 		strings.Contains(stderrOutput, "cannot connect to the Docker daemon") ||
 		!isDaemonRunning() {
@@ -131,12 +152,32 @@ func checkDockerDaemon() PreCheckResult {
 		}
 	}
 
-	// NOW check for permission/connection issues
+	// Check for permission/connection issues
 	if strings.Contains(stderrOutput, "permission denied") ||
 		strings.Contains(stderrOutput, "dial unix") {
 
 		inGroupFile, _ := isUserInDockerGroup()
 		inActiveGroups, _ := isDockerInActiveGroups()
+
+		// check socket permissions specifically
+		hasSocketAccess, socketError := checkDockerSocketPermissions()
+
+		// User is in group (both file and active) but still can't access socket
+		if inGroupFile && inActiveGroups && !hasSocketAccess {
+			return PreCheckResult{
+				Passed:    false,
+				ErrorType: DockerPermissionDenied,
+				ErrorMessage: fmt.Sprintf("You're in the docker group, but the socket has incorrect permissions.\n\n"+
+					"Socket error: %s\n\n"+
+					"Docker error:\n%s", socketError, stderrOutput),
+				SuggestedAction: "Fix the Docker socket permissions:\n\n" +
+					"  sudo chown root:docker /var/run/docker.sock\n" +
+					"  sudo chmod 660 /var/run/docker.sock\n\n" +
+					"Or restart Docker to recreate the socket:\n\n" +
+					"  sudo systemctl restart docker\n\n" +
+					"Guide: https://docs.docker.com/engine/install/linux-postinstall/",
+			}
+		}
 
 		if inGroupFile && !inActiveGroups {
 			return PreCheckResult{
@@ -147,7 +188,8 @@ func checkDockerDaemon() PreCheckResult {
 					"More info: https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user",
 			}
 		}
-		// Check if docker group even exists
+
+		// Check if docker group exists
 		if !doesDockerGroupExist() {
 			return PreCheckResult{
 				Passed:       false,
@@ -161,6 +203,7 @@ func checkDockerDaemon() PreCheckResult {
 			}
 		}
 
+		// Docker group exists, just need to add user
 		return PreCheckResult{
 			Passed:       false,
 			ErrorType:    DockerPermissionDenied,
