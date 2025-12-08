@@ -45,21 +45,35 @@ Tired of typing `docker ps` a million times? me too. This is a simple TUI (text 
 
 ## Installation
 
+Here's the updated version:
+
 You can install DockMate quickly using the installer script, or build it from source if you prefer.
 
-- Install with one line (recommended):
+### Quick Install (Recommended)
 
-```bash
+```
 curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | bash
 ```
 
-- Build from source (if you want to tweak or contribute):
+**If the above fails**, download and run:
 
-```bash
+```
+curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh -o install.sh
+bash install.sh
+```
+
+### Build from Source
+
+If you want to tweak or contribute:
+
+```
 git clone https://github.com/shubh-io/dockmate
 cd dockmate
 go build -o dockmate
-# to make it available system-wide (optional)
+
+./dockmate
+
+# Optional: Make it available system-wide
 sudo mv dockmate /usr/local/bin/
 ```
 
