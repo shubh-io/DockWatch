@@ -158,6 +158,7 @@ func ListContainersUsingCLI() ([]Container, error) {
 	scanner := bufio.NewScanner(stdout)
 
 	var out []Container
+	var runningIDs []string // collect running container IDs
 
 	// docker ps returns json like this
 	type psEntry struct {
@@ -198,17 +199,9 @@ func ListContainersUsingCLI() ([]Container, error) {
 			State:  e.State,
 		}
 
-		// get live stats if container is running
+		// collect running container IDs for batch stats fetch
 		if e.State == "running" {
-			cpu, mem, pids, netio, blockio, err := GetContainerStats(e.ID)
-			if err == nil {
-				// only set if we got them
-				container.CPU = cpu
-				container.Memory = mem
-				container.PIDs = pids
-				container.NetIO = netio
-				container.BlockIO = blockio
-			}
+			runningIDs = append(runningIDs, e.ID)
 		}
 
 		out = append(out, container)
@@ -225,7 +218,103 @@ func ListContainersUsingCLI() ([]Container, error) {
 		return nil, err
 	}
 
+	// Fetch stats for all running containers in ONE call
+	if len(runningIDs) > 0 {
+		statsMap, err := GetAllContainerStats(runningIDs)
+		if err == nil {
+			// Apply stats to containers
+			for i := range out {
+				if stats, ok := statsMap[out[i].ID]; ok {
+					out[i].CPU = stats.CPU
+					out[i].Memory = stats.Memory
+					out[i].PIDs = stats.PIDs
+					out[i].NetIO = stats.NetIO
+					out[i].BlockIO = stats.BlockIO
+				}
+			}
+		}
+	}
+
 	return out, nil
+}
+
+// ContainerStats holds stats for a single container
+type ContainerStats struct {
+	CPU     string
+	Memory  string
+	PIDs    string
+	NetIO   string
+	BlockIO string
+}
+
+// GetAllContainerStats fetches stats for multiple containers in a single docker stats call
+// This is MUCH MUCH MUCH faster than calling docker stats separately for each container
+func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, error) {
+	if len(containerIDs) == 0 {
+		return nil, nil
+	}
+
+	// 5 sec timeout for batch stats (much faster than individual calls)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Build command with ALLcontainer IDs instead of one by one like old logic flow which resulted in more loading time
+	args := []string{"stats", "--no-stream", "--format", "{{json .}}"}
+	args = append(args, containerIDs...)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	// Read stats JSON lines
+	scanner := bufio.NewScanner(stdout)
+	statsMap := make(map[string]ContainerStats)
+
+	type statsEntry struct {
+		ID      string `json:"ID"`
+		CPUPerc string `json:"CPUPerc"`
+		MemPerc string `json:"MemPerc"`
+		PIDs    string `json:"PIDs"`
+		NetIO   string `json:"NetIO"`
+		BlockIO string `json:"BlockIO"`
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var s statsEntry
+		if err := json.Unmarshal([]byte(line), &s); err != nil {
+			continue // skip malformed lines
+		}
+
+		statsMap[s.ID] = ContainerStats{
+			CPU:     s.CPUPerc,
+			Memory:  s.MemPerc,
+			PIDs:    s.PIDs,
+			NetIO:   s.NetIO,
+			BlockIO: s.BlockIO,
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		cmd.Wait()
+		return nil, err
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return nil, err
+	}
+
+	return statsMap, nil
 }
 
 // ============================================================================
