@@ -1,68 +1,78 @@
 <div align="center">
 
-# DockMate 🐳
-A terminal-based Docker container manager that actually ***works***.
+# DockMate 🐳  
+A terminal-based Docker container manager that actually **works**.
 
----
-
-<!-- Badges -->
 ![WakaTime](https://wakatime.com/badge/github/shubh-io/DockMate.svg)
-![GitHub Stars](https://img.shields.io/github/stars/shubh-io/DockMate)
+![Version](https://img.shields.io/badge/version-0.0.3-blue)
 ![License](https://img.shields.io/github/license/shubh-io/DockMate)
+![GitHub Stars](https://img.shields.io/github/stars/shubh-io/DockMate)
 ![Pull Requests](https://img.shields.io/github/issues-pr/shubh-io/DockMate)
 ![Last Commit](https://img.shields.io/github/last-commit/shubh-io/DockMate)
-![Repo Size](https://img.shields.io/github/repo-size/shubh-io/DockMate)
+---
+
+
 
 </div>
 
-**Note:** Renamed from _DockWatch_ to avoid confusion with existing project
+> **Note**: Previously named **DockWatch** (renamed to avoid confusion with another project).
 
+![DockMate demo gif](assets/demo.gif)
 
-![DockMate demo gif](demo.gif)
+---
 
-## What is this?
+## Overview
 
-Tired of typing `docker ps` a million times? me too. This is a simple TUI (text user interface) that lets you manage docker containers without leaving your terminal. Think htop but for docker.
+DockMate is a TUI (text user interface) for managing Docker containers without leaving your terminal.  
+Think of `htop`, but for Docker.
+
+- See live container stats at a glance
+- Start, stop, restart, and remove containers with single keypresses
+- Jump into logs or an interactive shell instantly
+
+---
 
 ## Features
 
-- Live container stats (CPU, memory, PIDs, Net I/O, Block I/O)
-- Start/stop/restart containers with a single keypress
-- View container logs (last 100 lines)
-- Interactive shell access
+- Live container metrics: CPU, memory, PIDs, network I/O, block I/O
+- Start / stop / restart containers
+- View recent logs
+- Open an interactive shell inside a container
 - Sort by any column
-- Auto-refreshes every 2 seconds
-- Keyboard-driven (no mouse needed)
-- Responsive to terminal resize
+- Auto-refresh every 2 seconds
+- Fully keyboard-driven (no mouse)
+- Resizes cleanly with your terminal
+
+---
 
 ## Requirements
 
 - Docker installed and running
-- Linux (tested on Ubuntu/Debian)
-- Go 1.24+ (IF building from source)
+- Linux (primarily tested on Debian/Ubuntu)
+- Go 1.24+ **only if** building from source
 
-*Note: Should work on macOS with Docker. Windows support untested.*
+> Should also work on macOS with Docker, Windows is currently untested.
+
+---
 
 ## Installation
 
-Here's the updated version:
+You can install DockMate with a one-liner, or build from source if you prefer.
 
-You can install DockMate quickly using the installer script, or build it from source if you prefer.
-
-### Quick Install (Recommended)
+### Quick Install (recommended)
 
 ```
 curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | bash
 ```
 
-**If the above fails**, download and run:
+If that ever fails on your setup, use the two-step variant:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh -o install.sh
 bash install.sh
 ```
 
-### Build from Source
+### Build from source
 
 If you want to tweak or contribute:
 
@@ -71,45 +81,50 @@ git clone https://github.com/shubh-io/dockmate
 cd dockmate
 go build -o dockmate
 
+# Run locally
 ./dockmate
 
-# Optional: Make it available system-wide
+# Optional: make it available system-wide
 sudo mv dockmate /usr/local/bin/
 ```
 
-Run the app:
+### Updating
 
-```bash
-dockmate
 ```
-
-Update anytime
-
-```bash
-# from the running install method
+# Built-in updater
 dockmate update
 
-# or simply re-run the installer
+# Or simply re-run the installer
 curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | bash
 ```
 
-Verify downloads (optional but recommended)
+---
 
-If you want extra assurance when installing a release, we publish SHA256 checksums alongside binaries. After downloading a release asset and its `.sha256` file you can verify the binary locally:
+## Verifying downloads (optional)
 
-```bash
-# download the binary and the checksum file (example for v0.0.2)
-curl -fsSL -o dockmate-linux-amd64 https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64
-curl -fsSL -o dockmate-linux-amd64.sha256 https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64.sha256
+Release binaries are published with matching SHA256 checksum files.
 
-# verify (Linux)
+Example for `v0.0.2`:
+
+```
+# Download binary and checksum
+curl -fsSL -o dockmate-linux-amd64 \
+  https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64
+
+curl -fsSL -o dockmate-linux-amd64.sha256 \
+  https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64.sha256
+
+# Verify on Linux
 sha256sum -c dockmate-linux-amd64.sha256
 
-# or on macOS
+# Or on macOS
 shasum -a 256 -c dockmate-linux-amd64.sha256
 ```
 
-The installer script will also attempt to fetch and verify a matching `.sha256` file automatically; if the checksum is present and doesn't match the downloaded binary, installation will abort.
+The installer script will also try to fetch and verify the corresponding `.sha256` file automatically.  
+If verification fails, installation is aborted.
+
+---
 
 ## Usage
 
@@ -117,49 +132,66 @@ The installer script will also attempt to fetch and verify a matching `.sha256` 
 dockmate
 ```
 
-That's it. Navigate with arrows, press keys to manage containers.
+Use the keyboard to navigate and control containers.
+
+---
 
 ## Keyboard shortcuts
 
-| Key | What it does |
-|-----|--------------|
-| `↑/↓` or `j/k` | navigate containers |
-| `Tab` | switch to column mode |
-| `←/→` or `h/l` | navigate columns (in column mode) |
-| `Enter` | sort by selected column (in column mode) |
-| `s` | start container |
-| `x` | stop container |
-| `r` | restart container |
-| `l` | view logs |
-| `e` | open interactive shell |
-| `d` | remove container |
-| `q` or `Ctrl+C` | quit |
+| Key               | Action                          |
+|-------------------|---------------------------------|
+| `↑ / ↓` or `j / k`| Navigate containers             |
+| `Tab`             | Switch to column selection mode |
+| `← / →` or `h / l`| Move between columns            |
+| `Enter`           | Sort by selected column         |
+| `s`               | Start container                 |
+| `x`               | Stop container                  |
+| `r`               | Restart container               |
+| `l`               | View logs                       |
+| `e`               | Open interactive shell          |
+| `d`               | Remove container                |
+| `q` or `Ctrl+C`   | Quit                            |
 
-## Why another docker TUI?
+---
 
-Because I wanted something lightweight that just works. No config files, no setup, just run it and manage your containers.
+## Why DockMate?
+
+Most Docker TUIs either try to do too much or require config and setup.  
+DockMate aims to be:
+
+- Lightweight
+- Zero-config
+- “Install and go” for day-to-day container work
+
+---
 
 ## Roadmap
 
-- [ ] Remote docker host support
-- [ ] Resource usage graphs  
-- [ ] Docker compose integration
-- [ ] Container search/filter
-- [ ] .deb package
+- [ ] Docker Compose integration  
+- [ ] Container search / filter  
+- [ ] `.deb` package
 
+Have ideas? Open an issue.
 
-Got ideas? Open an issue!
+---
 
 ## Contributing
 
-Found a bug? Got an idea? Open an issue or send a PR.
+Bug reports, feature requests, and pull requests are all welcome.
+
+1. Fork the repo
+2. Create a feature branch
+3. Open a PR with a clear description
+
+---
 
 ## License
 
-MIT License - use it however you want
+MIT License – do pretty much whatever you want, just keep the license intact.
+
+---
 
 ## Credits
 
-Built by [@shubh-io](https://github.com/shubh-io) while learning Go and Docker.
-
-If you find this useful, star it ⭐
+Built by [@shubh-io](https://github.com/shubh-io) while learning Go and Docker.  
+If DockMate saves you some keystrokes, consider dropping a ⭐ on the repo.
