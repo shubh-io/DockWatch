@@ -1,19 +1,19 @@
-<div align="center">
 
-# DockMate 🐳  
-### A terminal-based Docker container manager that actually **works**.
+<h1 align="center">DockMate 🐳</h1>
+<p align="center"><b>A terminal-based Docker container manager that actually works.</b></p>
 
-![WakaTime](https://wakatime.com/badge/github/shubh-io/DockMate.svg)
-![Version](https://img.shields.io/badge/version-0.0.3-blue)
-![License](https://img.shields.io/github/license/shubh-io/DockMate)
-![GitHub Stars](https://img.shields.io/github/stars/shubh-io/DockMate)
-![Pull Requests](https://img.shields.io/github/issues-pr/shubh-io/DockMate)
-![Last Commit](https://img.shields.io/github/last-commit/shubh-io/DockMate)
----
+<p align="center">
+  <span><img src="https://wakatime.com/badge/github/shubh-io/DockMate.svg" /></span>
+  <span><img src="https://img.shields.io/github/stars/shubh-io/DockMate?style=flat&logo=github" /></span>
+  <span><img src="https://img.shields.io/github/v/release/shubh-io/DockMate?color=green" /></span>
+  <span><img src="https://img.shields.io/github/license/shubh-io/DockMate" /></span>
+  <span><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white" /></span>
+  <span><img src="https://img.shields.io/badge/TUI-Bubble%20Tea-blue?logo=go&logoColor=white" /></span>
+  <span><img src="https://img.shields.io/badge/Platform-Linux-blue?style=flat&logo=linux&logoColor=white" /></span>
+
+</p>
 
 
-
-</div>
 
 > **Note**: Previously named **DockWatch** (renamed to avoid confusion with another project).
 
