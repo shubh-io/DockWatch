@@ -9,11 +9,8 @@
   <span><img src="https://img.shields.io/github/license/shubh-io/DockMate" /></span>
   <span><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white" /></span>
   <span><img src="https://img.shields.io/badge/TUI-Bubble%20Tea-blue?logo=go&logoColor=white" /></span>
-  <span><img src="https://img.shields.io/badge/Platform-Linux-blue?style=flat&logo=linux&logoColor=white" /></span>
-
+  <span><img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-blue?style=flat&logo=linux&logoColor=white" /></span>
 </p>
-
-
 
 > **Note**: Previously named **DockWatch** (renamed to avoid confusion with another project).
 
@@ -48,37 +45,41 @@ Think of `htop`, but for Docker.
 ## Requirements
 
 - Docker installed and running
-- Linux (primarily tested on Debian/Ubuntu)
+- Linux or macOS
 - Go 1.24+ **only if** building from source
-
-> Should also work on macOS with Docker, Windows is currently untested.
 
 ---
 
 ## Installation
 
-You can install DockMate with a one-liner, or build from source if you prefer.
-
-### Quick Install (recommended)
+### 🍺 Homebrew (Recommended)
 
 ```
-curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | bash
+brew install shubh-io/tap/dockmate
+```
+
+Works on both **Linux** and **macOS**. Easiest way to install and update.
+
+### 📦 Quick Install Script
+
+```
+curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh | bash
 ```
 
 If that ever fails on your setup, use the two-step variant:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh -o install.sh
 bash install.sh
 ```
 
-### Build from source
+### 🔨 Build from Source
 
 If you want to tweak or contribute:
 
 ```
-git clone https://github.com/shubh-io/dockmate
-cd dockmate
+git clone https://github.com/shubh-io/DockMate
+cd DockMate
 go build -o dockmate
 
 # Run locally
@@ -88,14 +89,21 @@ go build -o dockmate
 sudo mv dockmate /usr/local/bin/
 ```
 
-### Updating
+### 🔄 Updating
 
+**Homebrew:**
 ```
-# Built-in updater
-dockmate update
+brew upgrade dockmate
+```
 
-# Or simply re-run the installer
-curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | bash
+**Built-in updater:**
+```
+dockmate update
+```
+
+**Or re-run the installer:**
+```
+curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh | bash
 ```
 
 ---
@@ -104,15 +112,15 @@ curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh |
 
 Release binaries are published with matching SHA256 checksum files.
 
-Example for `v0.0.2`:
+Example for verifying a release:
 
 ```
 # Download binary and checksum
 curl -fsSL -o dockmate-linux-amd64 \
-  https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64
+  https://github.com/shubh-io/DockMate/releases/download/v0.0.5/dockmate-linux-amd64
 
 curl -fsSL -o dockmate-linux-amd64.sha256 \
-  https://github.com/shubh-io/dockmate/releases/download/v0.0.2/dockmate-linux-amd64.sha256
+  https://github.com/shubh-io/DockMate/releases/download/v0.0.5/dockmate-linux-amd64.sha256
 
 # Verify on Linux
 sha256sum -c dockmate-linux-amd64.sha256
@@ -161,7 +169,7 @@ DockMate aims to be:
 
 - Lightweight
 - Zero-config
-- “Install and go” for day-to-day container work
+- "Install and go" for day-to-day container work
 
 ---
 
@@ -169,7 +177,9 @@ DockMate aims to be:
 
 - [ ] Docker Compose integration  
 - [ ] Container search / filter  
-- [ ] `.deb` package
+- [ ] Image management
+- [x] Homebrew distribution
+- [x] macOS support
 
 Have ideas? Open an issue.
 
