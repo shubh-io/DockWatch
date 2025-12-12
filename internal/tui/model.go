@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"log"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -14,8 +17,6 @@ import (
 	"github.com/shubh-io/dockmate/internal/docker"
 )
 
-// ============================================================================
-// Colors and styles
 // ============================================================================
 
 var (
@@ -116,29 +117,81 @@ var (
 			Foreground(borderColor)
 )
 
+// debug logger writes snapshots to a file (dockmate-debug.log) by default
+var (
+	debugLogger *log.Logger
+	debugFile   *os.File
+)
+
+// init sets up file-backed debug logging. If the file can't be opened,
+// debugLogger falls back to discarding output.
+func init() {
+	// default debug file in working directory
+	_ = SetDebugFile("dockmate-debug.log")
+}
+
+// SetDebugFile opens (or creates) the given path and directs debug output there.
+// It returns an error if the file cannot be opened.
+func SetDebugFile(path string) error {
+	if debugFile != nil {
+		_ = debugFile.Close()
+		debugFile = nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		// fallback to discard
+		debugLogger = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
+		return err
+	}
+	debugFile = f
+	debugLogger = log.New(debugFile, "DEBUG: ", log.LstdFlags)
+	return nil
+}
+
+// CloseDebug closes the current debug file (if any) and disables logging.
+func CloseDebug() error {
+	if debugFile == nil {
+		return nil
+	}
+	err := debugFile.Close()
+	debugFile = nil
+	debugLogger = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
+	return err
+}
+
+// layout sizing constants
+const (
+	HEADER_HEIGHT        = 8
+	CONTAINER_ROW_HEIGHT = 1
+	LOG_PANEL_HEIGHT     = 15
+)
+
 // ============================================================================
 // App state (bubble tea model)
 // ============================================================================
 
 // model holds everything for the TUI
 type model struct {
-	containers     []docker.Container // all containers (running + stopped)
-	cursor         int                // selected container index
-	page           int                // current page
-	pageSize       int                // containers per page
-	width          int                // terminal width
-	height         int                // terminal height
-	err            error              // last error
-	loading        bool               // fetching data?
-	message        string             // status message
-	startTime      time.Time          // when app started
-	showLogs       bool               // logs panel visible?
-	logsLines      []string           // log lines
-	logsContainer  string             // container id for logs
-	sortBy         sortColumn         // which column to sort by
-	sortAsc        bool               // sort direction
-	columnMode     bool               // column nav mode (vs row nav)
-	selectedColumn int                // selected column (0-8)
+	containers           []docker.Container // all containers (running + stopped)
+	cursor               int                // selected container index
+	page                 int                // current page
+	maxContainersPerPage int                // containers per page (dynamic)
+	terminalWidth        int                // terminal width
+	terminalHeight       int                // terminal height
+	err                  error              // last error
+	loading              bool               // fetching data?
+	message              string             // page indicator (persistent)
+	statusMessage        string             // transient status message
+	startTime            time.Time          // when app started
+	logsVisible          bool               // logs panel visible?
+	logPanelHeight       int                // height of logs panel
+	logsLines            []string           // log lines
+	logsContainer        string             // container id for logs
+	sortBy               sortColumn         // which column to sort by
+	sortAsc              bool               // sort direction
+	columnMode           bool               // column nav mode (vs row nav)
+	selectedColumn       int                // selected column (0-8)
+	currentMode          appMode            // current UI mode
 }
 
 // which column to sort by
@@ -157,6 +210,15 @@ const (
 	sortByPIDs
 )
 
+// which mode the TUI is in
+type appMode int
+
+const (
+	modeNormal appMode = iota
+	modeColumnSelect
+	modeLogs
+)
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -164,15 +226,19 @@ const (
 // set up initial state
 func InitialModel() model {
 	return model{
-		loading:        true,        // start loading
-		startTime:      time.Now(),  // track uptime
-		page:           0,           // first page
-		pageSize:       12,          // 15 containers per page
-		showLogs:       false,       // logs hidden
-		sortBy:         sortByState, // sort by state
-		sortAsc:        false,       // descending
-		columnMode:     false,       // row nav mode
-		selectedColumn: 7,           // state column (adjusted for new NET I/O column)
+		loading:              true,       // start loading
+		startTime:            time.Now(), // track uptime
+		page:                 0,          // first page
+		maxContainersPerPage: 12,         // initial guess until resize event
+		terminalWidth:        0,
+		terminalHeight:       0,
+		logsVisible:          false, // logs hidden by default
+		logPanelHeight:       LOG_PANEL_HEIGHT,
+		sortBy:               sortByState, // sort by state
+		sortAsc:              false,       // descending
+		columnMode:           false,       // row nav mode
+		selectedColumn:       7,           // state column (adjusted for new NET I/O column)
+		currentMode:          modeNormal,  // start in normal mode
 	}
 }
 
@@ -390,6 +456,63 @@ func parseSize(s string) float64 {
 	return val
 }
 
+// calculateMaxContainers determines how many containers fit on screen given current layout state
+func (m *model) calculateMaxContainers() int {
+	availableHeight := m.terminalHeight - HEADER_HEIGHT
+	if m.logsVisible {
+		availableHeight -= m.logPanelHeight
+	}
+	maxContainers := availableHeight / CONTAINER_ROW_HEIGHT
+	if maxContainers < 1 {
+		return 1
+	}
+	return maxContainers
+}
+
+// updatePagination recalculates page sizing and keeps cursor/page within bounds
+func (m *model) updatePagination() {
+	m.maxContainersPerPage = m.calculateMaxContainers()
+	if m.maxContainersPerPage < 1 {
+		m.maxContainersPerPage = 1
+	}
+
+	if len(m.containers) == 0 {
+		m.cursor = 0
+		m.page = 0
+		return
+	}
+
+	if m.cursor >= len(m.containers) {
+		m.cursor = len(m.containers) - 1
+	}
+
+	maxPage := (len(m.containers) - 1) / m.maxContainersPerPage
+	if maxPage < 0 {
+		maxPage = 0
+	}
+	if m.page > maxPage {
+		m.page = maxPage
+	}
+
+	if m.cursor < m.page*m.maxContainersPerPage {
+		m.page = m.cursor / m.maxContainersPerPage
+	}
+	if m.cursor >= (m.page+1)*m.maxContainersPerPage {
+		m.page = m.cursor / m.maxContainersPerPage
+	}
+
+	// keep persistent page indicator up-to-date
+	if m.maxContainersPerPage > 0 {
+		maxPage = (len(m.containers) - 1) / m.maxContainersPerPage
+		if maxPage < 0 {
+			maxPage = 0
+		}
+		m.message = fmt.Sprintf("Page %d/%d", m.page+1, maxPage+1)
+	} else {
+		m.message = fmt.Sprintf("Page %d/%d", m.page+1, 1)
+	}
+}
+
 // ============================================================================
 // Update (event handler)
 // ============================================================================
@@ -401,8 +524,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		// terminal resized
-		m.width = msg.Width
-		m.height = msg.Height
+		m.terminalWidth = msg.Width
+		m.terminalHeight = msg.Height
+		m.updatePagination()
 		return m, nil
 
 	case docker.ContainersMsg:
@@ -422,64 +546,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = max(0, len(m.containers)-1)
 		}
 
-		// calculate dynamic pageSize based on available screen space
-		// this ensures pagination adapts to terminal size
-		headerRows := 5
-		footerRows := 2
-		if m.message != "" {
-			footerRows = 3
-		}
-		logsRows := 0
-		if m.showLogs {
-			logsRows = 12
-		}
-		availableRows := m.height - headerRows - footerRows - logsRows - 1
-		if availableRows < 3 {
-			availableRows = 3
-		}
-		// Use fixed page size of 15 containers per page
-		// but if screen has less space, use available space
-		if availableRows < 12 {
-			m.pageSize = availableRows
-		} else {
-			m.pageSize = 12
-		}
-		if m.pageSize < 5 {
-			m.pageSize = 5
-		}
-
-		// keep page in bounds
-		maxPage := (len(m.containers) - 1) / m.pageSize
-		if maxPage < 0 {
-			maxPage = 0
-		}
-		if m.page > maxPage {
-			m.page = maxPage
-		}
-		if m.page < 0 {
-			m.page = 0
-		}
+		m.updatePagination()
 		return m, nil
 
 	case docker.LogsMsg:
 		// got logs
 		if msg.Err != nil {
-			m.message = fmt.Sprintf("Logs error: %v", msg.Err)
+			m.statusMessage = fmt.Sprintf("Logs error: %v", msg.Err)
 			m.logsLines = nil
-			m.showLogs = false
+			m.logsVisible = false
 		} else {
 			m.logsLines = msg.Lines
 			m.logsContainer = msg.ID
-			m.showLogs = true
+			m.logsVisible = true
 		}
+		m.updatePagination()
 		return m, nil
 
 	case actionDoneMsg:
 		// docker action finished
 		if msg.err != nil {
-			m.message = fmt.Sprintf("Error: %v", msg.err)
+			m.statusMessage = fmt.Sprintf("Error: %v", msg.err)
 		} else {
-			m.message = "Action completed successfully"
+			m.statusMessage = "Action completed successfully"
 		}
 		// refresh list
 		return m, fetchContainers()
@@ -487,34 +576,64 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// time to refresh
 		// always refresh container list, if logs panel is open, also refresh logs
-		if m.showLogs && m.logsContainer != "" {
+		if m.logsVisible && m.logsContainer != "" {
 			return m, tea.Batch(fetchContainers(), tickCmd(), fetchLogsCmd(m.logsContainer))
 		}
 		return m, tea.Batch(fetchContainers(), tickCmd())
 
 	case tea.KeyMsg:
 		// keyboard input
-		m.message = ""
+		m.statusMessage = ""
+
+		// Handle Escape key to return to normal mode
+		if msg.String() == "esc" {
+			if m.columnMode {
+				m.columnMode = false
+				m.currentMode = modeNormal
+				m.statusMessage = "Back to normal mode"
+				return m, nil
+			}
+			if m.logsVisible {
+				m.logsVisible = false
+				m.currentMode = modeNormal
+				m.updatePagination()
+				m.statusMessage = "Logs closed"
+				return m, nil
+			}
+		}
 
 		// special keys that work in both modes
 		switch msg.String() {
-		// for de bugging
-		// case "`": // backtick key just as example
-		// 	debugLogger.Printf(
-		// 		"STATE SNAPSHOT: width=%d height=%d page=%d cursor=%d pageSize=%d selectedColumn=%d",
-		// 		m.width, m.height, m.page, m.cursor, m.pageSize, m.selectedColumn,
-		// 	)
-		// 	m.message = "Dumped debug snapshot to dockmate-debug.log"
-		// 	return m, nil
+		// for debugging: press backtick (`) to dump a state snapshot to the debug logger
+		case "`":
+			debugLogger.Printf(
+				"STATE SNAPSHOT: width=%d height=%d page=%d cursor=%d perPage=%d selectedColumn=%d",
+				m.terminalWidth, m.terminalHeight, m.page, m.cursor, m.maxContainersPerPage, m.selectedColumn,
+			)
+			m.statusMessage = "Dumped debug snapshot"
+			return m, nil
 
 		case "tab":
 			// toggle column/row mode
 			m.columnMode = !m.columnMode
 			if m.columnMode {
-				m.message = "Column mode: Use ← → to navigate, Enter to sort"
+				m.currentMode = modeColumnSelect
+				m.statusMessage = "Column mode: Use ← → to navigate, Enter to sort"
 			} else {
-				m.message = "Row mode: Use ↑ ↓ to navigate containers"
+				m.currentMode = modeNormal
+				m.statusMessage = "Row mode: Use ↑ ↓ and ← → to navigate containers"
 			}
+			return m, nil
+
+		case "L":
+			// Toggle logs panel visibility without fetching new logs
+			m.logsVisible = !m.logsVisible
+			if m.logsVisible {
+				m.currentMode = modeLogs
+			} else {
+				m.currentMode = modeNormal
+			}
+			m.updatePagination()
 			return m, nil
 
 		case "enter":
@@ -562,7 +681,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						dir = "desc"
 					}
 					colNames := []string{"ID", "Name", "Memory", "CPU", "NET I/O", "Disk I/O", "Image", "Status", "State", "PIDs"}
-					m.message = fmt.Sprintf("Sorted by %s (%s)", colNames[m.selectedColumn], dir)
+					m.statusMessage = fmt.Sprintf("Sorted by %s (%s)", colNames[m.selectedColumn], dir)
 				}
 			}
 			return m, nil
@@ -597,7 +716,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.columnMode && m.cursor > 0 {
 				m.cursor--
 				// Switch to previous page if needed
-				if m.pageSize > 0 && m.cursor < m.page*m.pageSize {
+				if m.maxContainersPerPage > 0 && m.cursor < m.page*m.maxContainersPerPage {
 					m.page--
 				}
 			}
@@ -607,7 +726,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.columnMode && m.cursor < len(m.containers)-1 {
 				m.cursor++
 				// Switch to next page if needed
-				if m.pageSize > 0 && m.cursor >= (m.page+1)*m.pageSize {
+				if m.maxContainersPerPage > 0 && m.cursor >= (m.page+1)*m.maxContainersPerPage {
 					m.page++
 				}
 			}
@@ -616,45 +735,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Go to previous page (left arrow)
 			if m.page > 0 {
 				m.page--
-				if m.pageSize > 0 {
-					m.cursor = m.page * m.pageSize
+				if m.maxContainersPerPage > 0 {
+					m.cursor = m.page * m.maxContainersPerPage
 				}
 			}
-			maxPage := (len(m.containers) - 1) / m.pageSize
-			if maxPage < 0 {
-				maxPage = 0
-			}
-			m.message = fmt.Sprintf("Page %d/%d", m.page+1, maxPage+1)
+			m.updatePagination()
+			// updatePagination will update the persistent page indicator; do not set a transient status here
 
 		case key.Matches(msg, Keys.PageDown):
 			// Go to next page (right arrow)
-			maxPage := (len(m.containers) - 1) / m.pageSize
+			maxPage := 0
+			if m.maxContainersPerPage > 0 {
+				maxPage = (len(m.containers) - 1) / m.maxContainersPerPage
+			}
 			if maxPage < 0 {
 				maxPage = 0
 			}
 			if m.page < maxPage {
 				m.page++
-				m.cursor = m.page * m.pageSize
+				m.cursor = m.page * m.maxContainersPerPage
 			}
-			m.message = fmt.Sprintf("Page %d/%d", m.page+1, maxPage+1)
+			m.updatePagination()
+			// updatePagination will update the persistent page indicator; do not set a transient status here
 
 		case key.Matches(msg, Keys.Refresh):
 			// Manually refresh container list
 			m.loading = true
-			m.showLogs = false
+			m.logsVisible = false
+			m.updatePagination()
 			return m, fetchContainers()
 
 		case key.Matches(msg, Keys.Start):
 			// Start selected container
 			if len(m.containers) > 0 {
-				m.message = "Starting container..."
+				m.statusMessage = "Starting container..."
 				return m, doAction("start", m.containers[m.cursor].ID)
 			}
 
 		case key.Matches(msg, Keys.Stop):
 			// Stop selected container
 			if len(m.containers) > 0 {
-				m.message = "Stopping container..."
+				m.statusMessage = "Stopping container..."
 				return m, doAction("stop", m.containers[m.cursor].ID)
 			}
 
@@ -663,14 +784,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.containers) == 0 {
 				return m, nil
 			}
-			m.message = "Fetching logs..."
+			m.statusMessage = "Fetching logs..."
+			m.currentMode = modeLogs
+			// recompute pagination and persistent page indicator
+			m.updatePagination()
 			return m, fetchLogsCmd(m.containers[m.cursor].ID)
 
 		case key.Matches(msg, Keys.Exec):
 			// Open interactive shell in selected container (only if running)
 			if len(m.containers) > 0 && m.containers[m.cursor].State == "running" {
 				containerID := m.containers[m.cursor].ID
-				m.message = "Opening interactive shell..."
+				m.statusMessage = "Opening interactive shell..."
 				// Use bash to clear terminal and exec into container shell
 				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec docker exec -it %s /bin/sh", containerID)
 				c := exec.Command("bash", "-lc", cmdStr)
@@ -685,14 +809,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, Keys.Restart):
 			// Restart selected container
 			if len(m.containers) > 0 {
-				m.message = "Restarting container..."
+				m.statusMessage = "Restarting container..."
 				return m, doAction("restart", m.containers[m.cursor].ID)
 			}
 
 		case key.Matches(msg, Keys.Remove):
 			// Remove selected container
 			if len(m.containers) > 0 {
-				m.message = "Removing container..."
+				m.statusMessage = "Removing container..."
 				return m, doAction("rm", m.containers[m.cursor].ID)
 			}
 		}
@@ -706,14 +830,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // render everything
 func (m model) View() string {
-	if m.width == 0 {
+	if m.terminalWidth == 0 {
 		return "Initializing..."
 	}
 
 	var b strings.Builder
 
 	// Ensure minimum width
-	width := m.width
+	width := m.terminalWidth
 	if width < 80 {
 		width = 80
 	}
@@ -897,39 +1021,28 @@ func (m model) View() string {
 	b.WriteString("\n")
 	// container list (paginated)
 
-	// figure out how many rows we can show
-	headerRows := 5 // title + stats
-	footerRows := 2
-	if m.message != "" {
-		footerRows = 3
+	rowsToShow := m.maxContainersPerPage
+	if rowsToShow < 1 {
+		rowsToShow = m.calculateMaxContainers()
 	}
-	logsRows := 0
-	if m.showLogs {
-		// adapt logs panel size to screen height
-		if m.height < 30 {
-			logsRows = 11 // smaller on tiny screens
-		} else if m.height < 40 {
-			logsRows = 14
-		} else {
-			logsRows = 17
+	if rowsToShow < 1 {
+		rowsToShow = 1
+	}
+
+	pageStart := m.page * rowsToShow
+	if pageStart > len(m.containers) {
+		pageStart = 0
+		if len(m.containers) > rowsToShow {
+			pageStart = len(m.containers) - rowsToShow
 		}
 	}
-	containerRowsAvailable := m.height - headerRows - footerRows - logsRows - 1
-	if containerRowsAvailable < 3 {
-		containerRowsAvailable = 3
+	pageEnd := pageStart + rowsToShow
+	if pageEnd > len(m.containers) {
+		pageEnd = len(m.containers)
 	}
-	// use all available space instead of fixed row count
-	containerRowsToShow := containerRowsAvailable
 
-	// pagination math - use dynamic pageSize
-	if m.pageSize == 0 {
-		m.pageSize = containerRowsAvailable
-	}
-	pageStart := m.page * m.pageSize
-	pageEnd := min(pageStart+m.pageSize, len(m.containers))
-	// figure out visible rows
 	startIdx := pageStart
-	endIdx := min(pageEnd, pageStart+containerRowsToShow)
+	endIdx := pageEnd
 
 	// render rows
 	rowsRendered := 0
@@ -943,63 +1056,43 @@ func (m model) View() string {
 
 	// fill empty space
 	emptyRow := normalStyle.Render(strings.Repeat(" ", width))
-	for i := rowsRendered; i < containerRowsToShow; i++ {
+	for i := rowsRendered; i < rowsToShow; i++ {
 		b.WriteString(emptyRow)
 		b.WriteString("\n")
 	}
 
 	// logs panel (if visible)
 
-	if m.showLogs {
-		// divider
-		b.WriteString(dividerStyle.Render(strings.Repeat("─", width)))
-		b.WriteString("\n")
-
-		// logs title
-		logsTitle := fmt.Sprintf("Logs: %s ", m.logsContainer)
-		if len(logsTitle) < width {
-			logsTitle += strings.Repeat(" ", width-len(logsTitle))
-		}
-		b.WriteString(titleStyle.Render(logsTitle))
-		b.WriteString("\n")
-
-		// show logs based on available space
-		maxLogLines := logsRows - 2 // subtract title and divider
-		if maxLogLines < 3 {
-			maxLogLines = 3
-		}
-		logLinesToShow := min(maxLogLines, len(m.logsLines))
-		startLog := max(0, len(m.logsLines)-logLinesToShow)
-		for i := startLog; i < len(m.logsLines); i++ {
-			logLine := m.logsLines[i]
-			// truncate long lines
-			if len(logLine) > width-4 {
-				logLine = logLine[:width-7] + "..."
-			}
-			b.WriteString(normalStyle.Render("  " + logLine))
-			b.WriteString("\n")
-		}
-
-		// fill empty log rows
-		for i := logLinesToShow; i < maxLogLines; i++ {
-			b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
-			b.WriteString("\n")
-		}
+	if m.logsVisible {
+		b.WriteString(m.renderLogsPanel(width))
 	}
 
-	// status message
+	// page indicator (persistent) - always render
+	pageLine := m.message
+	if pageLine == "" {
+		pageLine = fmt.Sprintf("Page %d/%d", m.page+1, 1)
+	}
+	if len(pageLine) < width {
+		pageLine += strings.Repeat(" ", width-len(pageLine))
+	}
+	b.WriteString(messageStyle.Render(pageLine))
+	b.WriteString("\n")
 
-	if m.message != "" {
-		msgLine := "" + m.message
-		if len(msgLine) < width {
-			msgLine += strings.Repeat(" ", width-len(msgLine))
+	// transient status message (if any)
+	if m.statusMessage != "" {
+		sm := m.statusMessage
+		if len(sm) < width {
+			sm += strings.Repeat(" ", width-len(sm))
 		}
-		b.WriteString(messageStyle.Render(msgLine))
+		b.WriteString(messageStyle.Render(sm))
 		b.WriteString("\n")
 	}
+
+	// 1-row bottom padding after messages
+	b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
+	b.WriteString("\n")
 
 	// footer (keybinds)
-
 	footer := m.renderFooter(width)
 	b.WriteString(footer)
 
@@ -1280,9 +1373,9 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 		stateW-3, state,
 		pidsW, pids)
 
-	// pad to width
-	if len(row) < totalWidth {
-		row += strings.Repeat(" ", totalWidth-len(row))
+	// Pad row to totalWidth BEFORE styling to ensure color extends to edge
+	if visibleLen(row) < totalWidth {
+		row += strings.Repeat(" ", totalWidth-visibleLen(row))
 	}
 
 	// Apply style based on selection and state
@@ -1302,23 +1395,92 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 	}
 }
 
-// render keyboard shortcuts at bottom
+// renderLogsPanel prints a fixed-height logs section respecting the configured panel height
+func (m model) renderLogsPanel(width int) string {
+	var b strings.Builder
+
+	b.WriteString(dividerStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
+	logsTitle := fmt.Sprintf("Logs: %s ", m.logsContainer)
+	if len(logsTitle) < width {
+		logsTitle += strings.Repeat(" ", width-len(logsTitle))
+	}
+	b.WriteString(titleStyle.Render(logsTitle))
+	b.WriteString("\n")
+
+	maxLogLines := m.logPanelHeight - 2 // account for divider and title
+	if maxLogLines < 1 {
+		maxLogLines = 1
+	}
+
+	startLog := 0
+	if len(m.logsLines) > maxLogLines {
+		startLog = len(m.logsLines) - maxLogLines
+	}
+
+	for i := startLog; i < len(m.logsLines); i++ {
+		logLine := m.logsLines[i]
+		if len(logLine) > width-4 {
+			logLine = logLine[:width-7] + "..."
+		}
+		b.WriteString(normalStyle.Render("  " + logLine))
+		b.WriteString("\n")
+	}
+
+	renderedLines := len(m.logsLines) - startLog
+	for i := renderedLines; i < maxLogLines; i++ {
+		b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// render keyboard shortcuts at bottom (mode-aware)
 func (m model) renderFooter(width int) string {
-	keys := []struct {
+	var keys []struct {
 		key  string
 		desc string
-	}{
-		{"Tab", "Col Mode"},
-		{"↑↓", "Rows"},
-		{"←→", "Cols / Navigate"},
-		{"Enter", "Sort"},
-		{"s", "Start"},
-		{"x", "Stop"},
-		{"r", "Restart"},
-		{"l", "Logs"},
-		{"e", "Interactive Shell"},
-		{"d", "Remove"},
-		{"q", "Quit"},
+	}
+
+	// Show different shortcuts based on current mode
+	switch m.currentMode {
+	case modeColumnSelect:
+		keys = []struct {
+			key  string
+			desc string
+		}{
+			{"←→", "Select Col"},
+			{"Enter", "Sort"},
+			{"Esc", "Back"},
+		}
+	case modeLogs:
+		keys = []struct {
+			key  string
+			desc string
+		}{
+			{"Shift + l", "Close Logs"},
+			{"↑↓", "Scroll"},
+			{"E", "Interactive Shell"},
+			{"Esc", "Back"},
+		}
+	default: // modeNormal
+		keys = []struct {
+			key  string
+			desc string
+		}{
+			{"↑↓", "Nav"},
+			{"←→", "Nav pages"},
+			{"Tab", "Col Mode"},
+			{"s", "Start"},
+			{"x", "Stop"},
+			{"r", "Restart"},
+			{"l", "Logs"},
+			{"e", "Shell"},
+			{"d", "Remove"},
+			{"q", "Quit"},
+		}
 	}
 
 	var footer strings.Builder
@@ -1344,6 +1506,20 @@ func (m model) renderFooter(width int) string {
 	}
 
 	return footerStr
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // format duration like HH:MM:SS
