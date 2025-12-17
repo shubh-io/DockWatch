@@ -29,6 +29,55 @@ Think of `htop`, but for Docker.
 
 ---
 
+## Comparison
+<div align="center">
+
+### DockMate vs LazyDocker
+
+
+| Feature | DockMate | LazyDocker |
+|---------|----------|------------|
+| **Installation** | One-command + Homebrew | Homebrew + Multiple package managers |
+| **Auto-update** | ✅ Built-in (`dockmate update`) | ❌ Manual updates required |
+| **Container loading** | ✅ **Fast (2 seconds)** | Slower (variable) |
+| **UI Framework** | ✅ **Bubble Tea (new)** | gocui (older library) |
+| **Dependencies** | ✅ **Minimal** (bash, curl) | Multiple system dependencies |
+| **Container stats** | ✅ Real-time (CPU, memory, network, disk I/O) | Real-time + ASCII graphs |
+| **Interactive logs** | ✅ | ✅ |
+| **Shell access** | ✅ One keypress | ✅ |
+| **Docker Compose** | ⏳ Planned | ✅ |
+| **Image management** | ⏳ Planned | ✅ Layer inspection & pruning |
+| **Metrics graphs** | ❌ Text-based (lighter) | ✅ Customizable ASCII graphs |
+| **Mouse support** | ❌ Keyboard-focused | ✅ |
+| **Resource usage** | ✅ **Lightweight** | Heavier footprint |
+| **Best for** | Speed, simplicity, modern workflows | Feature-rich power users |
+
+
+
+</div>
+
+### When to use DockMate?
+
+- ✅ You want a modern, lightweight, and fast TUI
+- ✅ You prefer keyboard-driven workflows
+- ✅ You need quick container monitoring over SSH
+- ✅ You want one-command install with auto-updates
+- ✅ You value simplicity over features
+
+### When to use LazyDocker?
+
+- ✅ You need Docker Compose management
+- ✅ You want metrics graphs and visualizations
+- ✅ You need image layer inspection
+- ✅ You prefer mouse support
+- ✅ You want a mature tool
+
+
+**Both are great tools - choose based on your workflow!** 🐳
+
+
+---
+
 ## Features
 
 - Live container metrics: CPU, memory, PIDs, network I/O, block I/O
@@ -42,11 +91,28 @@ Think of `htop`, but for Docker.
 
 ---
 
+
 ## Requirements
 
 - Docker installed and running
 - Linux or macOS
+
 - Go 1.24+ **only if** building from source
+
+---
+
+## System Dependencies
+
+DockMate uses the following system tools:
+
+- **bash** - Required for install script
+- **systemctl** - Used to check Docker service status (systemd-based systems)
+- **curl** - For one-command installation
+
+**Non-systemd systems:** Service check will be skipped on systems without systemd (OpenRC, runit, etc). Container management still works.
+
+**macOS:** systemctl checks are automatically skipped.
+
 
 ---
 
