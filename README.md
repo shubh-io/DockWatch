@@ -29,6 +29,52 @@ Think of `htop`, but for Docker.
 
 ---
 
+## Comparison
+<div align="center">
+
+### DockMate vs LazyDocker
+
+
+| Feature | DockMate | LazyDocker |
+|---------|----------|------------|
+| **Installation** | One-command install | Manual binary/brew |
+| **Auto-update** | ✅ Built-in (`dockmate update`) | ❌ Manual |
+| **Container loading speed** | ~2 seconds | Variable |
+| **Real-time stats** | ✅ CPU, memory, network, disk I/O | ✅ + graphs |
+| **Interactive logs** | ✅ | ✅ |
+| **Shell access** | ✅ One keypress | ✅ |
+| **Docker Compose support** | ❌ (planned) | ✅ |
+| **Image management** | ❌ | ✅ Layer inspection |
+| **Mouse support** | ❌ Keyboard-only | ✅ |
+| **Metrics visualization** | ❌ Text-based | ✅ Graphs |
+| **Dependencies** | Minimal (bash, curl) | More complex |
+| **Learning curve** | Low | Medium |
+| **Best for** | Quick monitoring & simple management | Feature-rich power users |
+
+</div>
+
+### When to use DockMate?
+
+- ✅ You want a modern, lightweight, and fast TUI
+- ✅ You prefer keyboard-driven workflows
+- ✅ You need quick container monitoring over SSH
+- ✅ You want one-command install with auto-updates
+- ✅ You value simplicity over features
+
+### When to use LazyDocker?
+
+- ✅ You need Docker Compose management
+- ✅ You want metrics graphs and visualizations
+- ✅ You need image layer inspection
+- ✅ You prefer mouse support
+- ✅ You want a mature, battle-tested tool
+
+
+**Both are great tools - choose based on your workflow!** 🐳
+
+
+---
+
 ## Features
 
 - Live container metrics: CPU, memory, PIDs, network I/O, block I/O
@@ -42,11 +88,28 @@ Think of `htop`, but for Docker.
 
 ---
 
+
 ## Requirements
 
 - Docker installed and running
 - Linux or macOS
+
 - Go 1.24+ **only if** building from source
+
+---
+
+## System Dependencies
+
+DockMate uses the following system tools:
+
+- **bash** - Required for install script
+- **systemctl** - Used to check Docker service status (systemd-based systems)
+- **curl** - For one-command installation
+
+**Non-systemd systems:** Service check will be skipped on systems without systemd (OpenRC, runit, etc). Container management still works.
+
+**macOS:** systemctl checks are automatically skipped.
+
 
 ---
 
