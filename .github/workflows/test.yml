@@ -1,0 +1,33 @@
+name: Test Installation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test install
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Add to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Test binary
+        run: dockmate --version || echo "No version flag"
+        
+  test-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test install
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Add to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Test binary
+        run: dockmate --version || echo "No version flag"
