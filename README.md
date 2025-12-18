@@ -134,6 +134,33 @@ If that ever fails on your setup, use the two-step variant:
 curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh -o install.sh
 sh install.sh
 ```
+
+### Alternative: User-local installation
+
+If you encounter permission issues with `/usr/local/bin`, install to your user directory instead:
+
+```
+curl -fsSL https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh | INSTALL_DIR=$HOME/.local/bin sh
+```
+
+Then add to your PATH. Choose based on your shell:
+
+**For Bash** (most Linux):
+```
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**For Zsh** (macOS default):
+```
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Not sure which shell?** Run `echo $SHELL` to check.
+
+
+
 ---
 
 **Note:** Some shells cache executable locations. If `dockmate` isn't found immediately after
