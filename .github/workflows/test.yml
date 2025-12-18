@@ -1,26 +1,117 @@
+
 name: Test Installation
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
-  test-linux:
+  # Test modern Ubuntu (systemd-based)
+  test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test system-wide install with sudo
+        run: |
+          chmod +x install.sh
+          sudo ./install.sh
+      - name: Verify system install
+        run: |
+          which dockmate
+          dockmate --version || echo "No version flag"
+          
+  test-ubuntu-user-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test user-local install without sudo
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Add to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Verify user install
+        run: |
+          which dockmate
+          dockmate --version || echo "No version flag"
+
+  # Test older Ubuntu (different systemd version)
+  test-ubuntu-20:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test install on Ubuntu 20.04
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Add to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Verify
+        run: dockmate --version || echo "No version flag"
+
+  # Test without sudo (Docker container simulation)
+  test-no-sudo:
+    runs-on: ubuntu-latest
+    container: 
+      image: golang:1.21-alpine
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash curl git
+      - uses: actions/checkout@v4
+      - name: Test install as root without sudo
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=/usr/local/bin ./install.sh
+      - name: Verify
+        run: dockmate --version || echo "No version flag"
+
+  # Test macOS M1/ARM (Apple Silicon)
+  test-macos-arm:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: System info
+        run: |
+          uname -a
+          uname -m
+          uname -s
       - name: Test install
         run: |
           chmod +x install.sh
           INSTALL_DIR=$HOME/.local/bin ./install.sh
       - name: Add to PATH
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Test binary
-        run: dockmate --version || echo "No version flag"
-        
-  test-macos:
-    runs-on: macos-14
+      - name: Verify architecture match
+        run: |
+          file $(which dockmate)
+          dockmate --version || echo "No version flag"
+
+  # Test macOS Intel (x86_64)
+  test-macos-intel:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: System info
+        run: |
+          uname -a
+          uname -m
+          uname -s
+      - name: Test install
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Add to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Verify architecture match
+        run: |
+          file $(which dockmate)
+          dockmate --version || echo "No version flag"
+
+  # Test macOS latest (follows GitHub's latest)
+  test-macos-latest:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Test install
@@ -29,5 +120,126 @@ jobs:
           INSTALL_DIR=$HOME/.local/bin ./install.sh
       - name: Add to PATH
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Test binary
+      - name: Verify
         run: dockmate --version || echo "No version flag"
+
+  # Test with zsh (default on macOS)
+  test-zsh-shell:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test with zsh
+        shell: zsh {0}
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          which dockmate
+          dockmate --version || echo "No version flag"
+
+  # Test with bash explicitly
+  test-bash-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test with bash
+        shell: bash
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          which dockmate
+          dockmate --version || echo "No version flag"
+
+  # Test checksum verification
+  test-checksum-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test checksum verification works
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh | tee install.log
+          grep -q "Checksum verified" install.log || exit 1
+      - name: Verify binary
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          dockmate --version || echo "No version flag"
+
+  # Test reinstall/upgrade scenario
+  test-reinstall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: First install
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Reinstall (should detect existing)
+        run: |
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Verify still works
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          dockmate --version || echo "No version flag"
+
+  # Test different architectures detection
+  test-arch-detection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify correct arch detected
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh | tee install.log
+          
+          # Check that amd64 binary was downloaded for x86_64 system
+          grep -q "x86_64" install.log || grep -q "amd64" install.log
+          
+          # Verify binary is correct architecture
+          export PATH="$HOME/.local/bin:$PATH"
+          file $(which dockmate) | grep -q "x86-64"
+
+  # Test PATH not set scenario
+  test-without-path:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install without adding to PATH
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/.local/bin ./install.sh
+      - name: Test direct execution
+        run: $HOME/.local/bin/dockmate --version || echo "No version flag"
+
+  # Test minimal Alpine Linux (runit-based, not systemd)
+  test-alpine-minimal:
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:latest
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache bash curl git coreutils
+      - uses: actions/checkout@v4
+      - name: Test install on Alpine
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=/usr/local/bin ./install.sh
+      - name: Verify
+        run: dockmate --version || echo "No version flag"
+
+  # Test with restricted permissions
+  test-restricted-permissions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create restricted user directory
+        run: |
+          mkdir -p $HOME/restricted
+          chmod 700 $HOME/restricted
+      - name: Install to user directory
+        run: |
+          chmod +x install.sh
+          INSTALL_DIR=$HOME/restricted ./install.sh
+      - name: Verify
+        run: $HOME/restricted/dockmate --version || echo "No version flag"
