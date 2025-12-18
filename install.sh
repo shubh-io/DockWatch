@@ -76,7 +76,14 @@ if command -v brew >/dev/null 2>&1; then
     fi
 fi
 
-# Better architecture detection
+# Detect OS and architecture
+OS_NAME=$(uname -s)
+case "$OS_NAME" in
+    Darwin) RELEASE_OS="darwin" ;;
+    Linux) RELEASE_OS="linux" ;;
+    *) echo "Unsupported OS: $OS_NAME"; exit 1 ;;
+esac
+
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64) RELEASE_ARCH="amd64" ;;
@@ -84,8 +91,10 @@ case "$ARCH" in
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
+ASSET_NAME="${BINARY_NAME}-${RELEASE_OS}-${RELEASE_ARCH}"
+
 echo "==> Preparing to install dockmate from GitHub releases..."
-echo "==> System: $(uname -s) / Architecture: $ARCH ($RELEASE_ARCH)"
+echo "==> System: $OS_NAME / Architecture: $ARCH ($RELEASE_ARCH)"
 echo ""
 
 # Installation directory (default or from environment)
