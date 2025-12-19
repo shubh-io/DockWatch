@@ -124,7 +124,8 @@ func ListContainers() ([]Container, error) {
 		Names  string `json:"Names"`
 		Image  string `json:"Image"`
 		Status string `json:"Status"`
-		State  string `json:"State"`
+		// State  string `json:"State"`
+		Ports string `json:"Ports"`
 	}
 
 	// parse each line
@@ -149,16 +150,32 @@ func ListContainers() ([]Container, error) {
 		}
 
 		// build container struct
+		// derive a short state from Status text (ex- "Up 2 minutes" -> "running")
+		st := strings.ToLower(strings.TrimSpace(e.Status))
+		state := "unknown"
+		if strings.HasPrefix(st, "up") {
+			state = "running"
+		} else if strings.HasPrefix(st, "paused") || strings.Contains(st, "paused") {
+			state = "paused"
+		} else if strings.Contains(st, "restarting") {
+			state = "restarting"
+		} else if strings.HasPrefix(st, "exited") || strings.Contains(st, "exited") || strings.Contains(st, "dead") {
+			state = "exited"
+		} else if strings.HasPrefix(st, "created") {
+			state = "created"
+		}
+
 		container := Container{
 			ID:     e.ID,
 			Names:  names,
 			Image:  e.Image,
 			Status: e.Status,
-			State:  e.State,
+			State:  state,
+			Ports:  e.Ports,
 		}
 
-		// collect running container Ids for batch stats fetch
-		if e.State == "running" {
+		// collect running container Ids for batch stats fetch (based on derived State)
+		if state == "running" {
 			runningIDs = append(runningIDs, e.ID)
 		}
 
@@ -185,7 +202,6 @@ func ListContainers() ([]Container, error) {
 				if stats, ok := statsMap[out[i].ID]; ok {
 					out[i].CPU = stats.CPU
 					out[i].Memory = stats.Memory
-					out[i].PIDs = stats.PIDs
 					out[i].NetIO = stats.NetIO
 					out[i].BlockIO = stats.BlockIO
 				}
@@ -229,7 +245,6 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 		ID      string `json:"ID"`
 		CPUPerc string `json:"CPUPerc"`
 		MemPerc string `json:"MemPerc"`
-		PIDs    string `json:"PIDs"`
 		NetIO   string `json:"NetIO"`
 		BlockIO string `json:"BlockIO"`
 	}
@@ -246,9 +261,9 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 		}
 
 		statsMap[s.ID] = ContainerStats{
-			CPU:     s.CPUPerc,
-			Memory:  s.MemPerc,
-			PIDs:    s.PIDs,
+			CPU:    s.CPUPerc,
+			Memory: s.MemPerc,
+			// PIDs:    s.PIDs,
 			NetIO:   s.NetIO,
 			BlockIO: s.BlockIO,
 		}

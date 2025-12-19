@@ -192,6 +192,17 @@ type model struct {
 	columnMode           bool               // column nav mode (vs row nav)
 	selectedColumn       int                // selected column (0-8)
 	currentMode          appMode            // current UI mode
+
+	// settings
+	settings         Settings // user configurable settings
+	suspendRefresh   bool     // when true, suspend background refreshes of containers
+	settingsSelected int      // which settings row/column is selected in settting mdoe
+}
+
+// app settings
+type Settings struct {
+	ColumnPercents  []int // percent allocation for each column aprx sum to 100
+	RefreshInterval int   // seconds between auto refresh ticks
 }
 
 // which column to sort by
@@ -206,8 +217,7 @@ const (
 	sortByBlockIO
 	sortByImage
 	sortByStatus
-	sortByState
-	sortByPIDs
+	sortByPorts
 )
 
 // which mode the TUI is in
@@ -217,6 +227,7 @@ const (
 	modeNormal appMode = iota
 	modeColumnSelect
 	modeLogs
+	modeSettings
 )
 
 // ============================================================================
@@ -234,18 +245,26 @@ func InitialModel() model {
 		terminalHeight:       0,
 		logsVisible:          false, // logs hidden by default
 		logPanelHeight:       LOG_PANEL_HEIGHT,
-		sortBy:               sortByState, // sort by state
-		sortAsc:              false,       // descending
-		columnMode:           false,       // row nav mode
-		selectedColumn:       7,           // state column (adjusted for new NET I/O column)
-		currentMode:          modeNormal,  // start in normal mode
+		sortBy:               sortByStatus, // sort by status as default
+		sortAsc:              false,        // descending
+		columnMode:           false,        // row nav mode
+		selectedColumn:       7,            // status column
+		currentMode:          modeNormal,   // start in normal mode
+		// sensible defaults for settings (sum to 100)
+		settings: Settings{
+			ColumnPercents:  []int{8, 14, 6, 6, 10, 12, 18, 13, 13},
+			RefreshInterval: 2,
+		},
+		suspendRefresh:   false,
+		settingsSelected: 0,
 	}
 }
 
 // called once at startup
 // kicks off container fetch and timer
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchContainers(), tickCmd())
+	// start fetch and schedule tick based on settings
+	return tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 }
 
 // ============================================================================
@@ -273,8 +292,11 @@ func fetchContainers() tea.Cmd {
 }
 
 // fire every 2 seconds for auto-refresh
-func tickCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+func tickCmd(d time.Duration) tea.Cmd {
+	if d < time.Second {
+		d = 1 * time.Second
+	}
+	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -340,16 +362,9 @@ func (m *model) sortContainers() {
 		case sortByStatus:
 			// case-insensitive
 			less = strings.ToLower(m.containers[i].Status) < strings.ToLower(m.containers[j].Status)
-
-		case sortByState:
-			// running/exited/etc
-			less = strings.ToLower(m.containers[i].State) < strings.ToLower(m.containers[j].State)
-
-		case sortByPIDs:
-			// parse pid count as number
-			pidsI, _ := strconv.Atoi(m.containers[i].PIDs)
-			pidsJ, _ := strconv.Atoi(m.containers[j].PIDs)
-			less = pidsI < pidsJ
+		case sortByPorts:
+			// compare ports
+			less = strings.ToLower(m.containers[i].Ports) < strings.ToLower(m.containers[j].Ports)
 		case sortByNetIO:
 			// compare total network I/O (rx+tx) as bytes
 			netI := parseNetIO(m.containers[i].NetIO)
@@ -574,12 +589,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchContainers()
 
 	case tickMsg:
-		// time to refresh
+		// wakey wakey - time to refresh
 		// always refresh container list, if logs panel is open, also refresh logs
-		if m.logsVisible && m.logsContainer != "" {
-			return m, tea.Batch(fetchContainers(), tickCmd(), fetchLogsCmd(m.logsContainer))
+		// suspend refresh/fetching containers if in settings mode
+		if m.suspendRefresh {
+			return m, tickCmd(time.Duration(m.settings.RefreshInterval) * time.Second)
 		}
-		return m, tea.Batch(fetchContainers(), tickCmd())
+		if m.logsVisible && m.logsContainer != "" {
+			return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second), fetchLogsCmd(m.logsContainer))
+		}
+		return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 
 	case tea.KeyMsg:
 		// keyboard input
@@ -625,6 +644,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "f2":
+			// toggle settings mode - say yes to settings or no to settings
+			if m.currentMode == modeSettings {
+				m.currentMode = modeNormal
+				m.suspendRefresh = false
+				m.statusMessage = "Settings closed"
+				// normalize percents to sum 100
+				total := 0
+				for _, p := range m.settings.ColumnPercents {
+					total += p
+				}
+				if total == 0 {
+					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
+				} else if total != 100 {
+					// normalize proportionally
+					newp := make([]int, len(m.settings.ColumnPercents))
+					acc := 0
+					for i, p := range m.settings.ColumnPercents {
+						np := (p * 100) / total
+						newp[i] = np
+						acc += np
+					}
+					// fix rounding
+					if acc < 100 {
+						newp[0] += 100 - acc
+					}
+					m.settings.ColumnPercents = newp
+				}
+				return m, nil
+			}
+			m.currentMode = modeSettings
+			m.suspendRefresh = true
+			m.statusMessage = "Settings: adjust column % and refresh interval"
+			return m, nil
+
 		case "L":
 			// Toggle logs panel visibility without fetching new logs
 			m.logsVisible = !m.logsVisible
@@ -660,9 +714,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 7:
 					col = sortByStatus
 				case 8:
-					col = sortByState
-				case 9:
-					col = sortByPIDs
+					col = sortByPorts
 				}
 
 				if canSort {
@@ -680,7 +732,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.sortAsc {
 						dir = "desc"
 					}
-					colNames := []string{"ID", "Name", "Memory", "CPU", "NET I/O", "Disk I/O", "Image", "Status", "State", "PIDs"}
+					colNames := []string{"ID", "Name", "Memory", "CPU", "NET I/O", "Disk I/O", "Image", "Status", "PORTS"}
 					m.statusMessage = fmt.Sprintf("Sorted by %s (%s)", colNames[m.selectedColumn], dir)
 				}
 			}
@@ -698,9 +750,85 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right", "l":
 			// In column mode, move selection right
 			if m.columnMode {
-				if m.selectedColumn < 9 { // 0-9 for 10 columns
+				if m.selectedColumn < 8 { // 0-8 for 9 columns
 					m.selectedColumn++
 				}
+				return m, nil
+			}
+		}
+
+		// If we're in settings mode, handle settings navigation and edits
+		if m.currentMode == modeSettings {
+			switch msg.String() {
+			case "up", "k":
+				if m.settingsSelected > 0 {
+					m.settingsSelected--
+				}
+				return m, nil
+			case "down", "j":
+				// now support 10 rows: 0-8 columns + 9 = refresh interval
+				if m.settingsSelected < 9 {
+					m.settingsSelected++
+				}
+				return m, nil
+			case "left", "h", "-":
+				if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
+					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
+				}
+				if m.settingsSelected < 9 {
+					if m.settings.ColumnPercents[m.settingsSelected] > 1 {
+						m.settings.ColumnPercents[m.settingsSelected]--
+					}
+				} else {
+					// adjust refresh interval (min 1s)
+					if m.settings.RefreshInterval > 1 {
+						m.settings.RefreshInterval--
+					}
+				}
+				return m, nil
+			case "right", "l", "+":
+				if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
+					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
+				}
+				if m.settingsSelected < 9 {
+					m.settings.ColumnPercents[m.settingsSelected]++
+				} else {
+					// increase refresh interval (cap at 300s)
+					if m.settings.RefreshInterval < 300 {
+						m.settings.RefreshInterval++
+					}
+				}
+				return m, nil
+			case "enter":
+				// normalize and exit settings
+				total := 0
+				for _, p := range m.settings.ColumnPercents {
+					total += p
+				}
+				if total == 0 {
+					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
+				} else if total != 100 {
+					newp := make([]int, len(m.settings.ColumnPercents))
+					acc := 0
+					for i, p := range m.settings.ColumnPercents {
+						np := (p * 100) / total
+						newp[i] = np
+						acc += np
+					}
+					if acc < 100 {
+						newp[0] += 100 - acc
+					}
+					m.settings.ColumnPercents = newp
+				}
+				m.currentMode = modeNormal
+				m.suspendRefresh = false
+				m.statusMessage = "setting saved"
+				// apply new interval immediately and refresh once
+				return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
+			case "esc":
+				m.currentMode = modeNormal
+				m.suspendRefresh = false
+				m.statusMessage = "Settings closed"
 				return m, nil
 			}
 		}
@@ -834,6 +962,11 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
+	// If in settings mode, render settings in fullscreen to save some performance and get rid of render bugs
+	if m.currentMode == modeSettings {
+		return m.renderSettings(m.terminalWidth)
+	}
+
 	var b strings.Builder
 
 	// Ensure minimum width
@@ -870,48 +1003,29 @@ func (m model) View() string {
 	// table header
 
 	// column widths - compute with smart allocation to prevent overflow
-	usableWidth := width - 2 // account for padding and separators (10 columns = ~10 separators)
+	usableWidth := width - 2 // account for padding and separators
 
-	// define minimum widths and relative weights for each column
-	type colSpec struct {
-		min    int
-		weight int
+	// define minimum widths for each column
+	mins := []int{13, 17, 8, 6, 10, 11, 11, 13, 15}
+
+	// get user-defined percents; fall back to defaults if malformed
+	percents := m.settings.ColumnPercents
+	if len(percents) != 9 {
+		percents = []int{8, 14, 6, 6, 10, 12, 11, 13, 15}
 	}
 
-	specs := []colSpec{
-		{12, 12}, // ID
-		{15, 15}, // NAME
-		{8, 8},   // MEMORY
-		{6, 8},   // CPU
-		{10, 13}, // NET I/O
-		{12, 13}, // Disk I/O
-		{15, 18}, // IMAGE
-		{12, 12}, // STATUS
-		{7, 13},  // STATE
-		{5, 10},  // PIDs
-	}
-
-	// compute total weight
-	totalWeight := 0
-	for _, spec := range specs {
-		totalWeight += spec.weight
-	}
-
-	// allocate widths proportionally, respecting minimums
-	widths := make([]int, len(specs))
+	// allocate widths by percent, respecting minimums
+	widths := make([]int, len(mins))
 	allocated := 0
-	for i, spec := range specs {
-		// proportional allocation
-		desired := (usableWidth * spec.weight) / totalWeight
-		widths[i] = max(spec.min, desired)
+	for i := range mins {
+		desired := (usableWidth * percents[i]) / 100
+		widths[i] = max(mins[i], desired)
 		allocated += widths[i]
 	}
 
-	// if we exceeded usableWidth, shrink columns proportionally (keeping minimums)
+	// if we have remaining space, distribute one char at a time across columns
 	if allocated < usableWidth {
 		remaining := usableWidth - allocated
-		// spread remaining 1 char at a time across columns with the biggest weight
-
 		for remaining > 0 {
 			for i := range widths {
 				if remaining == 0 {
@@ -936,12 +1050,11 @@ func (m model) View() string {
 	blockIOW := widths[5]
 	imageW := widths[6]
 	statusW := widths[7]
-	stateW := widths[8]
-	pidsW := widths[9]
+	portsW := widths[8]
 
 	// debugLogger.Printf(
-	// 	"Column widths: ID=%d NAME=%d MEMORY=%d CPU=%d NET I/O=%d Disk I/O=%d IMAGE=%d STATUS=%d STATE=%d PIDs=%d",
-	// 	idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, stateW, pidsW,
+	// 	"Column widths: ID=%d NAME=%d MEMORY=%d CPU=%d NET I/O=%d Disk I/O=%d IMAGE=%d STATUS=%d PORTS=%d",
+	// 	idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW,
 	// )
 	// sort indicator (▲/▼)
 	sortIndicator := func(col sortColumn) string {
@@ -961,7 +1074,8 @@ func (m model) View() string {
 	buildColumn := func(colIdx int, title string, width int, indicator string) string {
 		text := title + indicator
 		// Pad to width (width includes the space before the column)
-		paddingNeeded := width - len(text)
+		// Use visibleLen to account for multi-byte/ANSI characters so padding stays correct
+		paddingNeeded := width - visibleLen(text)
 		if paddingNeeded > 0 {
 			text += strings.Repeat(" ", paddingNeeded)
 		}
@@ -973,17 +1087,16 @@ func (m model) View() string {
 		return headerStyle.Render(cell)
 	}
 
-	// build all 10 columns
+	// build all 9 columns
 	col0 := buildColumn(0, "CONTAINER ID", idW-1, sortIndicator(sortByID))
 	col1 := buildColumn(1, "NAME", nameW-1, sortIndicator(sortByName))
-	col2 := buildColumn(2, "MEMORY", memoryW-1, sortIndicator(sortByMemory))
-	col3 := buildColumn(3, "CPU", cpuW-1, sortIndicator(sortByCPU))
+	col2 := buildColumn(2, "MEMORY", memoryW-2, sortIndicator(sortByMemory))
+	col3 := buildColumn(3, "CPU", cpuW-2, sortIndicator(sortByCPU))
 	col4 := buildColumn(4, "NET I/O", netIOW-1, sortIndicator(sortByNetIO))
-	col5 := buildColumn(5, "Disk I/O", blockIOW-1, sortIndicator(sortByBlockIO))
+	col5 := buildColumn(5, "DISK I/O", blockIOW-1, sortIndicator(sortByBlockIO))
 	col6 := buildColumn(6, "IMAGE", imageW-1, sortIndicator(sortByImage))
-	col7 := buildColumn(7, "STATUS", statusW-1, sortIndicator(sortByStatus))
-	col8 := buildColumn(8, "STATE", stateW-1, sortIndicator(sortByState))
-	col9 := buildColumn(9, "PIDs", pidsW, sortIndicator(sortByPIDs)) // last column gets full width
+	col7 := buildColumn(7, "STATUS", statusW, sortIndicator(sortByStatus))
+	col8 := buildColumn(8, "PORTS", portsW, sortIndicator(sortByPorts)) // last column gets full width
 
 	// combine into header - separators only
 	sepStyle := lipgloss.NewStyle().
@@ -1009,8 +1122,6 @@ func (m model) View() string {
 	hdrBuilder.WriteString(col7)
 	hdrBuilder.WriteString(sep)
 	hdrBuilder.WriteString(col8)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col9)
 
 	hdr := hdrBuilder.String()
 	// pad header to fill width
@@ -1048,7 +1159,7 @@ func (m model) View() string {
 	rowsRendered := 0
 	for i := startIdx; i < endIdx; i++ {
 		c := m.containers[i]
-		row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, stateW, pidsW, width)
+		row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, width)
 		b.WriteString(row)
 		b.WriteString("\n")
 		rowsRendered++
@@ -1153,7 +1264,7 @@ func (m model) renderStatsSection(running, stopped, total int, uptime time.Durat
 		infoLabelStyle.Render("Session:"),
 		infoValueStyle.Render(formatDuration(uptime)),
 		infoLabelStyle.Render("Refresh:"),
-		infoValueStyle.Render("2s"))
+		infoValueStyle.Render(fmt.Sprintf("%ds", m.settings.RefreshInterval)))
 
 	// padding between left and right
 	leftLen := visibleLen(runningLine)
@@ -1287,7 +1398,7 @@ func truncateToWidth(s string, width int) string {
 
 // render one container row
 // applies styles based on selection and state
-func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, stateW, pidsW, totalWidth int) string {
+func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, totalWidth int) string {
 	// get name from names array
 	name := ""
 	if len(c.Names) > 0 {
@@ -1296,25 +1407,23 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 
 	// truncate fields to fit
 	id := c.ID
-	if len(id) > idW-2 {
-		id = id[:idW-2]
+	if visibleLen(id) > idW-2 {
+		id = truncateToWidth(id, idW-2)
 	}
 
-	if len(name) > nameW-2 {
-		name = name[:nameW-3] + "…"
+	if visibleLen(name) > nameW-2 {
+		name = truncateToWidth(name, nameW-2)
 	}
 	img := c.Image
-	if len(img) > imageW-2 {
-		img = img[:imageW-3] + "…"
+	if visibleLen(img) > imageW-2 {
+		img = truncateToWidth(img, imageW-2)
 	}
 	status := c.Status
-	if len(status) > statusW-2 {
-		status = status[:statusW-3] + "…"
+	if visibleLen(status) > statusW-2 {
+		status = truncateToWidth(status, statusW-2)
 	}
-	state := c.State
-	if len(state) > stateW-2 {
-		state = state[:stateW-2] + "…"
-	}
+	// STATE column hidden for testing; keep state value for styling only
+	// state := c.State
 
 	// net IO
 	netio := c.NetIO
@@ -1345,33 +1454,32 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 	}
 
 	cpu := c.CPU
-	if visibleLen(cpu) > cpuW-1 {
+	if visibleLen(cpu) > cpuW-2 {
 		// truncate to fit with ellipsis
-		cpu = truncateToWidth(cpu, cpuW-1)
+		cpu = truncateToWidth(cpu, cpuW-2)
 	}
 	if cpu == "" {
 		cpu = "─"
 	}
-	pids := c.PIDs
-	if pids == "" {
-		pids = "─"
+	ports := c.Ports
+	if ports == "" {
+		ports = "─"
 	}
-	if visibleLen(pids) > pidsW-1 {
-		pids = truncateToWidth(pids, pidsW-1)
+	if visibleLen(ports) > portsW-7 {
+		ports = truncateToWidth(ports, portsW-6)
 	}
 
-	// Format row (include NET I/O between CPU and IMAGE)
-	row := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
+	// Format row (STATE column omitted)
+	row := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
 		idW-1, id,
 		nameW-1, name,
-		memoryW-1, mem,
-		cpuW-1, cpu,
+		memoryW-2, mem,
+		cpuW-2, cpu,
 		netIOW-1, netio,
 		blockIOW-1, blockio,
 		imageW-1, img,
-		statusW-1, status,
-		stateW-3, state,
-		pidsW, pids)
+		statusW, status,
+		portsW-2, ports)
 
 	// Pad row to totalWidth BEFORE styling to ensure color extends to edge
 	if visibleLen(row) < totalWidth {
@@ -1437,6 +1545,70 @@ func (m model) renderLogsPanel(width int) string {
 	return b.String()
 }
 
+// renderSettings shows a full-screen settings view where users can
+// adjust column percent allocations .
+func (m model) renderSettings(width int) string {
+	var b strings.Builder
+
+	title := titleStyle.Render("┌─ Settings 🛠️─┐")
+	padding := (width - visibleLen(title)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	header := strings.Repeat(" ", padding) + title
+	if visibleLen(header) < width {
+		header += strings.Repeat(" ", width-visibleLen(header))
+	}
+	b.WriteString(header)
+	b.WriteString("\n")
+
+	// Column list
+	colNames := []string{"CONTAINER ID", "NAME", "MEMORY", "CPU", "NET I/O", "Disk I/O", "IMAGE", "STATUS", "PORTS"}
+	if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
+		m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
+	}
+
+	for i, name := range colNames {
+		pct := m.settings.ColumnPercents[i]
+		line := fmt.Sprintf(" %2d%%  %s", pct, name)
+		if m.settingsSelected == i {
+			// highlight selected
+			b.WriteString(selectedStyle.Render(padRight(line, width)))
+		} else {
+			b.WriteString(normalStyle.Render(padRight(line, width)))
+		}
+		b.WriteString("\n")
+	}
+
+	// Refresh interval row (index 9)
+	b.WriteString("\n")
+	refreshLine := fmt.Sprintf(" %2ds  Refresh Interval", m.settings.RefreshInterval)
+	if m.settingsSelected == 9 {
+		b.WriteString(selectedStyle.Render(padRight(refreshLine, width)))
+	} else {
+		b.WriteString(normalStyle.Render(padRight(refreshLine, width)))
+	}
+	b.WriteString("\n")
+
+	b.WriteString("\n")
+	instr := "←/→ or +/- adjust  •  ↑/↓ navigate   •  Enter save  •  Esc cancel"
+	if visibleLen(instr) < width {
+		instr += strings.Repeat(" ", width-visibleLen(instr))
+	}
+	b.WriteString(infoValueStyle.Render(instr))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+// padRight pads a string to visible width
+func padRight(s string, width int) string {
+	if visibleLen(s) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visibleLen(s))
+}
+
 // render keyboard shortcuts at bottom (mode-aware)
 func (m model) renderFooter(width int) string {
 	var keys []struct {
@@ -1479,6 +1651,7 @@ func (m model) renderFooter(width int) string {
 			{"l", "Logs"},
 			{"e", "Shell"},
 			{"d", "Remove"},
+			{"f2", "Settings"},
 			{"q", "Quit"},
 		}
 	}
