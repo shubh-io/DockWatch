@@ -172,37 +172,60 @@ const (
 
 // model holds everything for the TUI
 type model struct {
-	containers           []docker.Container // all containers (running + stopped)
-	cursor               int                // selected container index
-	page                 int                // current page
-	maxContainersPerPage int                // containers per page (dynamic)
-	terminalWidth        int                // terminal width
-	terminalHeight       int                // terminal height
-	err                  error              // last error
-	loading              bool               // fetching data?
-	message              string             // page indicator (persistent)
-	statusMessage        string             // transient status message
-	startTime            time.Time          // when app started
-	logsVisible          bool               // logs panel visible?
-	logPanelHeight       int                // height of logs panel
-	logsLines            []string           // log lines
-	logsContainer        string             // container id for logs
-	sortBy               sortColumn         // which column to sort by
-	sortAsc              bool               // sort direction
-	columnMode           bool               // column nav mode (vs row nav)
-	selectedColumn       int                // selected column (0-8)
-	currentMode          appMode            // current UI mode
+	containers           []docker.Container                // all containers (running + stopped)
+	projects             map[string]*docker.ComposeProject // compose projects
+	expandedProjects     map[string]bool                   // track which projects are expanded
+	flatList             []treeRow                         // flattened tree for rendering
+	cursor               int                               // selected container index
+	page                 int                               // current page
+	maxContainersPerPage int                               // containers per page (dynamic)
+	terminalWidth        int                               // terminal width
+	terminalHeight       int                               // terminal height
+	err                  error                             // last error
+	loading              bool                              // fetching data?
+	message              string                            // page indicator (persistent)
+	statusMessage        string                            // transient status message
+	startTime            time.Time                         // when app started
+	logsVisible          bool                              // logs panel visible?
+	logPanelHeight       int                               // height of logs panel
+	logsLines            []string                          // log lines
+	logsContainer        string                            // container id for logs
+	sortBy               sortColumn                        // which column to sort by
+	sortAsc              bool                              // sort direction
+	columnMode           bool                              // column nav mode (vs row nav)
+	selectedColumn       int                               // selected column (0-8)
+	currentMode          appMode                           // current UI mode
 
 	// settings
 	settings         Settings // user configurable settings
+	composeViewMode  bool     // currently selected compose view row
 	suspendRefresh   bool     // when true, suspend background refreshes of containers
 	settingsSelected int      // which settings row/column is selected in settting mdoe
 }
+
+// treeRow represents a row in the flattened tree
+type treeRow struct {
+	isProject   bool
+	projectName string
+	container   *docker.Container
+	indent      int
+	running     int // for project rows
+	total       int // for project rows
+}
+
+// runtime
+// type ContainerRuntime string
+
+// const (
+// 	RuntimeDocker ContainerRuntime = "docker"
+// 	RuntimePodman ContainerRuntime = "podman"
+// )
 
 // app settings
 type Settings struct {
 	ColumnPercents  []int // percent allocation for each column aprx sum to 100
 	RefreshInterval int   // seconds between auto refresh ticks
+	// Runtime         ContainerRuntime // runtime
 }
 
 // which column to sort by
@@ -228,6 +251,7 @@ const (
 	modeColumnSelect
 	modeLogs
 	modeSettings
+	modeComposeView
 )
 
 // ============================================================================
@@ -243,6 +267,9 @@ func InitialModel() model {
 		maxContainersPerPage: 12,         // initial guess until resize event
 		terminalWidth:        0,
 		terminalHeight:       0,
+		projects:             make(map[string]*docker.ComposeProject),
+		expandedProjects:     make(map[string]bool),
+		flatList:             []treeRow{},
 		logsVisible:          false, // logs hidden by default
 		logPanelHeight:       LOG_PANEL_HEIGHT,
 		sortBy:               sortByStatus, // sort by status as default
@@ -254,6 +281,7 @@ func InitialModel() model {
 		settings: Settings{
 			ColumnPercents:  []int{8, 14, 6, 6, 10, 12, 18, 13, 13},
 			RefreshInterval: 2,
+			// Runtime:         RuntimeDocker, // default to docker
 		},
 		suspendRefresh:   false,
 		settingsSelected: 0,
@@ -279,6 +307,12 @@ type actionDoneMsg struct {
 // sent every 2 seconds for refresh
 type tickMsg time.Time
 
+// sent when compose projects are fetched
+type composeProjectsMsg struct {
+	Projects map[string]*docker.ComposeProject
+	Err      error
+}
+
 // ============================================================================
 // Async commands
 // ============================================================================
@@ -288,6 +322,14 @@ func fetchContainers() tea.Cmd {
 	return func() tea.Msg {
 		containers, err := docker.ListContainers()
 		return docker.ContainersMsg{Containers: containers, Err: err}
+	}
+}
+
+// fetch compose projects asynchronously
+func fetchComposeProjects() tea.Cmd {
+	return func() tea.Msg {
+		projects, err := docker.FetchComposeProjects()
+		return composeProjectsMsg{Projects: projects, Err: err}
 	}
 }
 
@@ -323,68 +365,72 @@ func fetchLogsCmd(id string) tea.Cmd {
 
 // sort containers by current column and direction
 func (m *model) sortContainers() {
-	sort.Slice(m.containers, func(i, j int) bool {
-		less := false
+	// helper to compare two containers according to current sort settings
+	lessContainer := func(a, b docker.Container) bool {
 
 		switch m.sortBy {
 		case sortByID:
-			// simple string comparison
-			less = m.containers[i].ID < m.containers[j].ID
+			return a.ID < b.ID
 
 		case sortByName:
-			// case-insensitive name sort
-			nameI := ""
-			if len(m.containers[i].Names) > 0 {
-				nameI = m.containers[i].Names[0]
+			ai, aj := "", ""
+
+			if len(a.Names) > 0 {
+				ai = a.Names[0]
 			}
-			nameJ := ""
-			if len(m.containers[j].Names) > 0 {
-				nameJ = m.containers[j].Names[0]
+
+			if len(b.Names) > 0 {
+				aj = b.Names[0]
 			}
-			less = strings.ToLower(nameI) < strings.ToLower(nameJ)
+			return strings.ToLower(ai) < strings.ToLower(aj)
 
 		case sortByMemory:
-			// parse percentages and compare
-			memI := parsePercent(m.containers[i].Memory)
-			memJ := parsePercent(m.containers[j].Memory)
-			less = memI < memJ
+			return parsePercent(a.Memory) < parsePercent(b.Memory)
 
 		case sortByCPU:
-			// same for cpu
-			cpuI := parsePercent(m.containers[i].CPU)
-			cpuJ := parsePercent(m.containers[j].CPU)
-			less = cpuI < cpuJ
-
+			return parsePercent(a.CPU) < parsePercent(b.CPU)
 		case sortByImage:
-			// case insensitive
-			less = strings.ToLower(m.containers[i].Image) < strings.ToLower(m.containers[j].Image)
+			return strings.ToLower(a.Image) < strings.ToLower(b.Image)
 
 		case sortByStatus:
-			// case-insensitive
-			less = strings.ToLower(m.containers[i].Status) < strings.ToLower(m.containers[j].Status)
+			return strings.ToLower(a.Status) < strings.ToLower(b.Status)
+
 		case sortByPorts:
-			// compare ports
-			less = strings.ToLower(m.containers[i].Ports) < strings.ToLower(m.containers[j].Ports)
+			return strings.ToLower(a.Ports) < strings.ToLower(b.Ports)
+
 		case sortByNetIO:
-			// compare total network I/O (rx+tx) as bytes
-			netI := parseNetIO(m.containers[i].NetIO)
-			netJ := parseNetIO(m.containers[j].NetIO)
-			less = netI < netJ
+
+			return parseNetIO(a.NetIO) < parseNetIO(b.NetIO)
 
 		case sortByBlockIO:
-			// compare total block I/O (read+write) as bytes
-			blockI := parseNetIO(m.containers[i].BlockIO)
-			blockJ := parseNetIO(m.containers[j].BlockIO)
-			less = blockI < blockJ
-
+			return parseNetIO(a.BlockIO) < parseNetIO(b.BlockIO)
+		default:
+			return a.ID < b.ID
 		}
+	}
 
-		// flip for descending
+	// sort main container slice
+	sort.Slice(m.containers, func(i, j int) bool {
 		if m.sortAsc {
-			return less
+			return lessContainer(m.containers[i], m.containers[j])
 		}
-		return !less
+		return !lessContainer(m.containers[i], m.containers[j])
 	})
+
+	// also sort containers inside each compose project so compose view  matches column sorting
+	if len(m.projects) > 0 {
+		for _, p := range m.projects {
+			sort.Slice(p.Containers, func(i, j int) bool {
+				if m.sortAsc {
+					return lessContainer(p.Containers[i], p.Containers[j])
+				}
+				return !lessContainer(p.Containers[i], p.Containers[j])
+			})
+		}
+		if m.composeViewMode {
+			m.buildFlatList()
+		}
+	}
 }
 
 // convert "0.48%" to 0.48
@@ -554,6 +600,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			// sort with current settings
 			m.sortContainers()
+			// If in compose view, just rebuild!!
+			if m.currentMode == modeComposeView {
+				m.buildFlatList()
+			}
 		}
 
 		// keep cursor in bounds
@@ -561,6 +611,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = max(0, len(m.containers)-1)
 		}
 
+		m.updatePagination()
+		return m, nil
+
+	case composeProjectsMsg:
+		// received compose projects
+		m.loading = false
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.statusMessage = fmt.Sprintf("Error fetching compose projects: %v", msg.Err)
+		} else {
+			m.projects = msg.Projects
+			if m.expandedProjects == nil {
+				m.expandedProjects = make(map[string]bool)
+			}
+			// default expand any projects
+			for name := range m.projects {
+				if _, exists := m.expandedProjects[name]; !exists {
+					m.expandedProjects[name] = true
+				}
+			}
+
+			// standalone section for lonely containers (not in compose projects)
+			if _, ok := m.expandedProjects["Standalone Containers"]; !ok {
+				m.expandedProjects["Standalone Containers"] = true
+			}
+			m.buildFlatList()
+			// keep cursor in bounds
+			if m.cursor >= len(m.flatList) {
+				m.cursor = max(0, len(m.flatList)-1)
+			}
+		}
+		// just update pagination
 		m.updatePagination()
 		return m, nil
 
@@ -597,6 +679,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.logsVisible && m.logsContainer != "" {
 			return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second), fetchLogsCmd(m.logsContainer))
+		}
+		if m.composeViewMode {
+			// in compose view , refresh both compose projects and containers as per refresh interval
+			return m, tea.Batch(fetchComposeProjects(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 		}
 		return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 
@@ -766,7 +852,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "down", "j":
-				// now support 10 rows: 0-8 columns + 9 = refresh interval
+				// now support 11 rows
 				if m.settingsSelected < 9 {
 					m.settingsSelected++
 				}
@@ -775,29 +861,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
 					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
 				}
-				if m.settingsSelected < 9 {
+				if m.settingsSelected >= 0 && m.settingsSelected <= 8 {
 					if m.settings.ColumnPercents[m.settingsSelected] > 1 {
 						m.settings.ColumnPercents[m.settingsSelected]--
 					}
-				} else {
+				} else if m.settingsSelected == 9 {
 					// adjust refresh interval (min 1s)
 					if m.settings.RefreshInterval > 1 {
 						m.settings.RefreshInterval--
 					}
 				}
+				// } else if m.settingsSelected == 10 {
+				// 	// toggle runtime option btwn docker and podman
+				// 	if m.settings.Runtime == RuntimeDocker {
+				// 		m.settings.Runtime = RuntimePodman
+				// 	} else {
+				// 		m.settings.Runtime = RuntimeDocker
+				// 	}
+				// }
 				return m, nil
 			case "right", "l", "+":
 				if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
 					m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
 				}
-				if m.settingsSelected < 9 {
+				if m.settingsSelected >= 0 && m.settingsSelected <= 8 {
 					m.settings.ColumnPercents[m.settingsSelected]++
-				} else {
+				} else if m.settingsSelected == 9 {
 					// increase refresh interval (cap at 300s)
 					if m.settings.RefreshInterval < 300 {
 						m.settings.RefreshInterval++
 					}
 				}
+				// test feature -
+				// } else if m.settingsSelected == 10 {
+				// 	// toggle runtime option
+				// 	if m.settings.Runtime == RuntimeDocker {
+				// 		m.settings.Runtime = RuntimePodman
+				// 	} else {
+				// 		m.settings.Runtime = RuntimeDocker
+				// 	}
+				// }
 				return m, nil
 			case "enter":
 				// normalize and exit settings
@@ -836,24 +939,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle key bindings
 		switch {
 		case key.Matches(msg, Keys.Quit):
-			// Exit application
 			return m, tea.Quit
 
 		case key.Matches(msg, Keys.Up):
 			// Move cursor up (only in row mode)
-			if !m.columnMode && m.cursor > 0 {
-				m.cursor--
-				// Switch to previous page if needed
+			if !m.columnMode {
+				if m.composeViewMode {
+					if len(m.flatList) > 0 {
+						// in compose view mode, move cursor up tree
+						m.moveCursorUpTree()
+					}
+				} else {
+					if m.cursor > 0 {
+						m.cursor--
+					}
+				}
 				if m.maxContainersPerPage > 0 && m.cursor < m.page*m.maxContainersPerPage {
 					m.page--
+					if m.page < 0 {
+						m.page = 0
+					}
+				}
+				if m.cursor < 0 {
+					m.cursor = 0
 				}
 			}
 
 		case key.Matches(msg, Keys.Down):
 			// Move cursor down (only in row mode)
-			if !m.columnMode && m.cursor < len(m.containers)-1 {
-				m.cursor++
-				// Switch to next page if needed
+			if !m.columnMode {
+				if m.composeViewMode {
+					if len(m.flatList) > 0 {
+						m.moveCursorDownTree()
+					}
+				} else {
+					maxItems := len(m.containers) - 1
+					if m.cursor < maxItems {
+						m.cursor++
+					}
+				}
 				if m.maxContainersPerPage > 0 && m.cursor >= (m.page+1)*m.maxContainersPerPage {
 					m.page++
 				}
@@ -864,27 +988,93 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.page > 0 {
 				m.page--
 				if m.maxContainersPerPage > 0 {
-					m.cursor = m.page * m.maxContainersPerPage
+					if m.composeViewMode {
+						pageStart := m.page * m.maxContainersPerPage
+						if pageStart < 0 {
+							pageStart = 0
+						}
+						pageEnd := pageStart + m.maxContainersPerPage
+						if pageEnd > len(m.flatList) {
+							pageEnd = len(m.flatList)
+						}
+						found := -1
+						for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
+							if !m.flatList[i].isProject {
+								found = i
+								break
+							}
+						}
+						if found != -1 {
+							m.cursor = found
+						} else if len(m.flatList) > 0 {
+							for i := pageStart - 1; i >= 0; i-- {
+								if !m.flatList[i].isProject {
+									m.cursor = i
+									break
+								}
+							}
+						}
+					} else {
+						m.cursor = m.page * m.maxContainersPerPage
+						if m.cursor >= len(m.containers) {
+							m.cursor = max(0, len(m.containers)-1)
+						}
+					}
 				}
 			}
 			m.updatePagination()
-			// updatePagination will update the persistent page indicator; do not set a transient status here
 
 		case key.Matches(msg, Keys.PageDown):
 			// Go to next page (right arrow)
 			maxPage := 0
 			if m.maxContainersPerPage > 0 {
-				maxPage = (len(m.containers) - 1) / m.maxContainersPerPage
+				count := len(m.containers)
+				if m.composeViewMode {
+					count = len(m.flatList)
+				}
+				maxPage = (count - 1) / m.maxContainersPerPage
 			}
 			if maxPage < 0 {
 				maxPage = 0
 			}
 			if m.page < maxPage {
 				m.page++
-				m.cursor = m.page * m.maxContainersPerPage
+				if m.maxContainersPerPage > 0 {
+					if m.composeViewMode {
+						pageStart := m.page * m.maxContainersPerPage
+						if pageStart < 0 {
+							pageStart = 0
+						}
+						pageEnd := pageStart + m.maxContainersPerPage
+						if pageEnd > len(m.flatList) {
+							pageEnd = len(m.flatList)
+						}
+						found := -1
+						for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
+							if !m.flatList[i].isProject {
+								found = i
+								break
+							}
+						}
+						if found != -1 {
+							m.cursor = found
+						} else if len(m.flatList) > 0 {
+							for i := pageStart; i < len(m.flatList); i++ {
+								if !m.flatList[i].isProject {
+									m.cursor = i
+									break
+								}
+							}
+						}
+					} else {
+						m.cursor = m.page * m.maxContainersPerPage
+						if m.cursor >= len(m.containers) {
+							m.cursor = max(0, len(m.containers)-1)
+						}
+					}
+				}
 			}
 			m.updatePagination()
-			// updatePagination will update the persistent page indicator; do not set a transient status here
 
 		case key.Matches(msg, Keys.Refresh):
 			// Manually refresh container list
@@ -893,35 +1083,96 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePagination()
 			return m, fetchContainers()
 
+		// Toggle compose view mode using C
+		case msg.String() == "c", msg.String() == "C":
+			// Toggle compose view mode
+			m.composeViewMode = !m.composeViewMode
+			m.currentMode = modeComposeView
+			if m.composeViewMode {
+				// Entering compose view
+				m.statusMessage = "Switched to Compose view "
+				m.expandedProjects = make(map[string]bool)
+				m.expandedProjects["Standalone Containers"] = true
+				m.cursor = 0
+				m.page = 0
+
+				// to save up performance and API calls
+				return m, tea.Batch(fetchComposeProjects(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
+			}
+			// Exiting compose view  - back to normal
+			m.statusMessage = "Switched to Container View"
+			m.cursor = 0
+			m.page = 0
+			m.updatePagination()
+			return m, nil
+
 		case key.Matches(msg, Keys.Start):
 			// Start selected container
-			if len(m.containers) > 0 {
-				m.statusMessage = "Starting container..."
-				return m, doAction("start", m.containers[m.cursor].ID)
+			if m.composeViewMode {
+				// In compose view mode, get container from flatList
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					container := m.flatList[m.cursor].container
+					m.statusMessage = "Starting container..."
+					return m, doAction("start", container.ID)
+				}
+			} else {
+				// Normal mode
+				if len(m.containers) > 0 {
+					m.statusMessage = "Starting container..."
+					return m, doAction("start", m.containers[m.cursor].ID)
+				}
 			}
 
 		case key.Matches(msg, Keys.Stop):
 			// Stop selected container
-			if len(m.containers) > 0 {
-				m.statusMessage = "Stopping container..."
-				return m, doAction("stop", m.containers[m.cursor].ID)
+			if m.composeViewMode {
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					container := m.flatList[m.cursor].container
+					m.statusMessage = "Stopping container..."
+					return m, doAction("stop", container.ID)
+				}
+			} else {
+				// Normal mode
+				if len(m.containers) > 0 {
+					m.statusMessage = "Stopping container..."
+					return m, doAction("stop", m.containers[m.cursor].ID)
+				}
 			}
 
 		case key.Matches(msg, Keys.Logs):
 			// Fetch and display logs for selected container
-			if len(m.containers) == 0 {
-				return m, nil
+			var containerID string
+			if m.composeViewMode {
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					containerID = m.flatList[m.cursor].container.ID
+				}
+			} else {
+				if len(m.containers) > 0 {
+					containerID = m.containers[m.cursor].ID
+				}
 			}
-			m.statusMessage = "Fetching logs..."
-			m.currentMode = modeLogs
-			// recompute pagination and persistent page indicator
-			m.updatePagination()
-			return m, fetchLogsCmd(m.containers[m.cursor].ID)
+			if containerID != "" {
+				m.statusMessage = "Fetching logs..."
+				m.currentMode = modeLogs
+				// recompute pagination and persistent page indicator
+				m.updatePagination()
+				return m, fetchLogsCmd(containerID)
+			}
 
 		case key.Matches(msg, Keys.Exec):
 			// Open interactive shell in selected container (only if running)
-			if len(m.containers) > 0 && m.containers[m.cursor].State == "running" {
-				containerID := m.containers[m.cursor].ID
+			var container *docker.Container
+			if m.composeViewMode {
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					container = m.flatList[m.cursor].container
+				}
+			} else {
+				if len(m.containers) > 0 {
+					container = &m.containers[m.cursor]
+				}
+			}
+			if container != nil && container.State == "running" {
+				containerID := container.ID
 				m.statusMessage = "Opening interactive shell..."
 				// Use bash to clear terminal and exec into container shell
 				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec docker exec -it %s /bin/sh", containerID)
@@ -936,16 +1187,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, Keys.Restart):
 			// Restart selected container
-			if len(m.containers) > 0 {
-				m.statusMessage = "Restarting container..."
-				return m, doAction("restart", m.containers[m.cursor].ID)
+			if m.composeViewMode {
+				// In compose view mode, get container from flatList
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					container := m.flatList[m.cursor].container
+					m.statusMessage = "Restarting container..."
+					return m, doAction("restart", container.ID)
+				}
+			} else {
+				// Normal mode
+				if len(m.containers) > 0 {
+					m.statusMessage = "Restarting container..."
+					return m, doAction("restart", m.containers[m.cursor].ID)
+				}
 			}
 
 		case key.Matches(msg, Keys.Remove):
 			// Remove selected container
-			if len(m.containers) > 0 {
-				m.statusMessage = "Removing container..."
-				return m, doAction("rm", m.containers[m.cursor].ID)
+			if m.composeViewMode {
+				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+					container := m.flatList[m.cursor].container
+					m.statusMessage = "Removing container..."
+					return m, doAction("rm", container.ID)
+				}
+			} else {
+				// Normal mode
+				if len(m.containers) > 0 {
+					m.statusMessage = "Removing container..."
+					return m, doAction("rm", m.containers[m.cursor].ID)
+				}
 			}
 		}
 	}
@@ -1140,29 +1410,50 @@ func (m model) View() string {
 		rowsToShow = 1
 	}
 
-	pageStart := m.page * rowsToShow
-	if pageStart > len(m.containers) {
-		pageStart = 0
-		if len(m.containers) > rowsToShow {
-			pageStart = len(m.containers) - rowsToShow
-		}
-	}
-	pageEnd := pageStart + rowsToShow
-	if pageEnd > len(m.containers) {
-		pageEnd = len(m.containers)
-	}
-
-	startIdx := pageStart
-	endIdx := pageEnd
-
 	// render rows
 	rowsRendered := 0
-	for i := startIdx; i < endIdx; i++ {
-		c := m.containers[i]
-		row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, width)
-		b.WriteString(row)
-		b.WriteString("\n")
-		rowsRendered++
+
+	if m.composeViewMode {
+		// Compose view mode -- render from flatList
+		pageStart := m.page * rowsToShow
+		if pageStart > len(m.flatList) {
+			pageStart = 0
+			if len(m.flatList) > rowsToShow {
+				pageStart = len(m.flatList) - rowsToShow
+			}
+		}
+		pageEnd := pageStart + rowsToShow
+		if pageEnd > len(m.flatList) {
+			pageEnd = len(m.flatList)
+		}
+
+		for i := pageStart; i < pageEnd; i++ {
+			row := m.renderTreeRow(m.flatList[i], i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, width)
+			b.WriteString(row)
+			b.WriteString("\n")
+			rowsRendered++
+		}
+	} else {
+		// Normal mode: render from containers
+		pageStart := m.page * rowsToShow
+		if pageStart > len(m.containers) {
+			pageStart = 0
+			if len(m.containers) > rowsToShow {
+				pageStart = len(m.containers) - rowsToShow
+			}
+		}
+		pageEnd := pageStart + rowsToShow
+		if pageEnd > len(m.containers) {
+			pageEnd = len(m.containers)
+		}
+
+		for i := pageStart; i < pageEnd; i++ {
+			c := m.containers[i]
+			row := m.renderContainerRow(c, i == m.cursor, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, width)
+			b.WriteString(row)
+			b.WriteString("\n")
+			rowsRendered++
+		}
 	}
 
 	// fill empty space
@@ -1590,6 +1881,16 @@ func (m model) renderSettings(width int) string {
 	}
 	b.WriteString("\n")
 
+	// // runtime row (index 10)
+	// b.WriteString("\n")
+	// runtime := fmt.Sprintf("Runtime: %s", m.settings.Runtime)
+	// if m.settingsSelected == 10 {
+	// 	b.WriteString(selectedStyle.Render(padRight(runtime, width)))
+	// } else {
+	// 	b.WriteString(normalStyle.Render(padRight(runtime, width)))
+	// }
+	// b.WriteString("\n")
+
 	b.WriteString("\n")
 	instr := "←/→ or +/- adjust  •  ↑/↓ navigate   •  Enter save  •  Esc cancel"
 	if visibleLen(instr) < width {
@@ -1651,8 +1952,28 @@ func (m model) renderFooter(width int) string {
 			{"l", "Logs"},
 			{"e", "Shell"},
 			{"d", "Remove"},
+			{"c", "Compose View"},
 			{"f2", "Settings"},
 			{"q", "Quit"},
+		}
+		if m.composeViewMode {
+			keys = []struct {
+				key  string
+				desc string
+			}{
+				{"↑↓", "Nav"},
+				{"←→", "Nav pages"},
+				{"Tab", "Col Mode"},
+				{"s", "Start"},
+				{"x", "Stop"},
+				{"r", "Restart"},
+				{"l", "Logs"},
+				{"e", "Shell"},
+				{"d", "Remove"},
+				{"c", "Normal View"},
+				{"f2", "Settings"},
+				{"q", "Quit"},
+			}
 		}
 	}
 
@@ -1705,4 +2026,260 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+// buildFlatList creates a flat list from the tree structure for rendering
+func (m *model) buildFlatList() {
+	m.flatList = []treeRow{}
+
+	// sort projects by name
+	projectNames := []string{}
+	for name := range m.projects {
+		projectNames = append(projectNames, name)
+	}
+	sort.Strings(projectNames)
+
+	// Add compose projects
+	for _, projectName := range projectNames {
+		project := m.projects[projectName]
+		running := 0
+		for _, c := range project.Containers {
+			if strings.ToLower(c.State) == "running" {
+				running++
+			}
+		}
+		total := len(project.Containers)
+
+		// Add project row
+		m.flatList = append(m.flatList, treeRow{
+			isProject:   true,
+			projectName: projectName,
+			running:     running,
+			total:       total,
+			indent:      0,
+		})
+
+		// Add container rows if expanded
+		if m.expandedProjects[projectName] {
+			for i := range project.Containers {
+				m.flatList = append(m.flatList, treeRow{
+					isProject: false,
+					container: &project.Containers[i],
+					indent:    1,
+				})
+			}
+		}
+	}
+
+	// Find standalone containers
+	standaloneContainers := []*docker.Container{}
+	composeContainerIDs := make(map[string]bool)
+
+	for _, project := range m.projects {
+		for _, c := range project.Containers {
+			composeContainerIDs[c.ID] = true
+		}
+	}
+
+	for i := range m.containers {
+		if !composeContainerIDs[m.containers[i].ID] {
+			standaloneContainers = append(standaloneContainers, &m.containers[i])
+		}
+	}
+
+	// Add standalone section if any exist
+	if len(standaloneContainers) > 0 {
+		m.flatList = append(m.flatList, treeRow{
+			isProject:   true,
+			projectName: "Standalone Containers",
+			total:       len(standaloneContainers),
+			indent:      0,
+		})
+
+		if m.expandedProjects["Standalone Containers"] {
+			for _, container := range standaloneContainers {
+				m.flatList = append(m.flatList, treeRow{
+					isProject: false,
+					container: container,
+					indent:    1,
+				})
+			}
+		}
+	}
+}
+
+// moveCursorUpTree moves the cursor to the previous non-project row in flatList
+func (m *model) moveCursorUpTree() {
+	if len(m.flatList) == 0 {
+		m.cursor = 0
+		return
+	}
+	i := m.cursor - 1
+	for i >= 0 && m.flatList[i].isProject {
+		i--
+	}
+	if i >= 0 {
+		m.cursor = i
+	} else {
+		// clamp to first non-project if any
+		for j := 0; j < len(m.flatList); j++ {
+			if !m.flatList[j].isProject {
+				m.cursor = j
+				return
+			}
+		}
+		m.cursor = 0
+	}
+}
+
+// moveCursorDownTree moves the cursor to the next non-project row in flatList
+func (m *model) moveCursorDownTree() {
+	if len(m.flatList) == 0 {
+		m.cursor = 0
+		return
+	}
+	i := m.cursor + 1
+	for i < len(m.flatList) && m.flatList[i].isProject {
+		i++
+	}
+	if i < len(m.flatList) {
+		m.cursor = i
+	} else {
+		// clamp to last non-project if any
+		for j := len(m.flatList) - 1; j >= 0; j-- {
+			if !m.flatList[j].isProject {
+				m.cursor = j
+				return
+			}
+		}
+		m.cursor = len(m.flatList) - 1
+	}
+}
+
+// renderTreeRow renders a single tree row (project header or container)
+func (m model) renderTreeRow(row treeRow, selected bool, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, totalWidth int) string {
+	if row.isProject {
+		// Project header row
+		expandIcon := "▼"
+		if !m.expandedProjects[row.projectName] {
+			expandIcon = "▶"
+		}
+
+		projectLabel := fmt.Sprintf(" %s %s [%d/%d running]", expandIcon, row.projectName, row.running, row.total)
+		if visibleLen(projectLabel) < totalWidth {
+			projectLabel += strings.Repeat(" ", totalWidth-visibleLen(projectLabel))
+		}
+
+		// Project row style
+		projectStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
+		return projectStyle.Render(projectLabel)
+	}
+
+	// Container row -- same format as normal view but with tree indent
+	c := row.container
+	if c == nil {
+		return normalStyle.Render(strings.Repeat(" ", totalWidth))
+	}
+
+	name := ""
+	if len(c.Names) > 0 {
+		name = c.Names[0]
+		name = strings.TrimPrefix(name, "/")
+	}
+
+	// Add tree indent
+	indentStr := ""
+	if row.indent > 0 {
+		indentStr = " ├─ "
+	}
+
+	id := c.ID
+	if visibleLen(id) > idW-2 {
+		id = truncateToWidth(id, idW-2)
+	}
+
+	containerName := indentStr + name
+	if visibleLen(containerName) > nameW-2 {
+		containerName = truncateToWidth(containerName, nameW-2)
+	}
+
+	img := c.Image
+	if visibleLen(img) > imageW-2 {
+		img = truncateToWidth(img, imageW-2)
+	}
+
+	status := c.Status
+	if visibleLen(status) > statusW-2 {
+		status = truncateToWidth(status, statusW-2)
+	}
+
+	mem := c.Memory
+	if mem == "" {
+		mem = "─"
+	}
+	if visibleLen(mem) > memoryW-2 {
+		mem = truncateToWidth(mem, memoryW-2)
+	}
+
+	cpu := c.CPU
+	if cpu == "" {
+		cpu = "─"
+	}
+	if visibleLen(cpu) > cpuW-2 {
+		cpu = truncateToWidth(cpu, cpuW-2)
+	}
+
+	netio := c.NetIO
+	if netio == "" {
+		netio = "─"
+	}
+	if visibleLen(netio) > netIOW-2 {
+		netio = truncateToWidth(netio, netIOW-2)
+	}
+
+	blockio := c.BlockIO
+	if blockio == "" {
+		blockio = "─"
+	}
+	if visibleLen(blockio) > blockIOW-2 {
+		blockio = truncateToWidth(blockio, blockIOW-2)
+	}
+
+	ports := c.Ports
+	if ports == "" {
+		ports = "─"
+	}
+	if visibleLen(ports) > portsW-7 {
+		ports = truncateToWidth(ports, portsW-6)
+	}
+
+	rowStr := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
+		idW-1, id,
+		nameW-1, containerName,
+		memoryW-2, mem,
+		cpuW-2, cpu,
+		netIOW-1, netio,
+		blockIOW-1, blockio,
+		imageW-1, img,
+		statusW, status,
+		portsW-2, ports)
+
+	if visibleLen(rowStr) < totalWidth {
+		rowStr += strings.Repeat(" ", totalWidth-visibleLen(rowStr))
+	}
+
+	if selected {
+		return selectedStyle.Render(rowStr)
+	}
+
+	switch strings.ToLower(c.State) {
+	case "running":
+		return runningStyle.Render(rowStr)
+	case "paused":
+		return pausedStyle.Render(rowStr)
+	case "exited", "dead":
+		return stoppedStyle.Render(rowStr)
+	default:
+		return normalStyle.Render(rowStr)
+	}
 }

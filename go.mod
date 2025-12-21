@@ -20,6 +20,7 @@ require (
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/savannahostrowski/tree-bubble v0.0.0-20230724043728-d7bb06a8a67e // indirect
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/term v0.6.0 // indirect

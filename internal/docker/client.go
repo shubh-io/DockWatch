@@ -291,3 +291,204 @@ func DoAction(action, containerID string) error {
 	cmd := exec.CommandContext(ctx, "docker", action, containerID)
 	return cmd.Run()
 }
+
+// FetchComposeProjects fetches all Docker Compose projects with their containers
+// Groups containers by compose project and calculates running/total counts
+func FetchComposeProjects() (map[string]*ComposeProject, error) {
+	// 30 sec timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Get all containers with compose labels
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a",
+		"--filter", "label=com.docker.compose.project",
+		"--format", "{{json .}}")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	// Structure for docker ps JSON output
+	type psEntry struct {
+		ID        string `json:"ID"`
+		Names     string `json:"Names"`
+		Image     string `json:"Image"`
+		Status    string `json:"Status"`
+		State     string `json:"State"`
+		Ports     string `json:"Ports"`
+		Labels    string `json:"Labels"`
+		CreatedAt string `json:"CreatedAt"`
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	projects := make(map[string]*ComposeProject)
+	var runningIDs []string
+
+	// Parse each container line
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var e psEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue // Skip malformed entries
+		}
+
+		// Parse labels from comma-separated key=value pairs
+		labels := parseLabels(e.Labels)
+
+		// Extract compose metadata
+		projectName := labels["com.docker.compose.project"]
+		serviceName := labels["com.docker.compose.service"]
+		containerNumber := labels["com.docker.compose.container-number"]
+
+		// Skip if not a compose container
+		if projectName == "" {
+			continue
+		}
+
+		// Split comma separated names
+		names := []string{}
+		if e.Names != "" {
+			for _, n := range strings.Split(e.Names, ",") {
+				names = append(names, strings.TrimSpace(n))
+			}
+		}
+
+		// Derive state from Status
+		st := strings.ToLower(strings.TrimSpace(e.Status))
+		state := "unknown"
+		if strings.HasPrefix(st, "up") {
+			state = "running"
+		} else if strings.HasPrefix(st, "paused") || strings.Contains(st, "paused") {
+			state = "paused"
+		} else if strings.Contains(st, "restarting") {
+			state = "restarting"
+		} else if strings.HasPrefix(st, "exited") || strings.Contains(st, "exited") || strings.Contains(st, "dead") {
+			state = "exited"
+		} else if strings.HasPrefix(st, "created") {
+			state = "created"
+		}
+
+		// Build container struct
+		container := Container{
+			ID:             e.ID,
+			Names:          names,
+			Image:          e.Image,
+			Status:         e.Status,
+			State:          state,
+			Ports:          e.Ports,
+			ComposeProject: projectName,
+			ComposeService: serviceName,
+			ComposeNumber:  containerNumber,
+		}
+
+		// Collect running IDs for stats
+		if state == "running" {
+			runningIDs = append(runningIDs, e.ID)
+		}
+
+		// Get or create project
+		project, exists := projects[projectName]
+		if !exists {
+			project = &ComposeProject{
+				Name:       projectName,
+				Containers: []Container{},
+				ConfigFile: labels["com.docker.compose.project.config_files"],
+				WorkingDir: labels["com.docker.compose.project.working_dir"],
+			}
+			projects[projectName] = project
+		}
+
+		// Add container to project
+		project.Containers = append(project.Containers, container)
+	}
+
+	// Check scanner errors
+	if err := scanner.Err(); err != nil {
+		cmd.Wait()
+		return nil, err
+	}
+
+	// Wait for command completion
+	if err := cmd.Wait(); err != nil {
+		return nil, err
+	}
+
+	// Fetch stats for running containers
+	if len(runningIDs) > 0 {
+		statsMap, err := GetAllContainerStats(runningIDs)
+		if err == nil {
+			// Apply stats to containers in projects
+			for _, project := range projects {
+				for i := range project.Containers {
+					if stats, ok := statsMap[project.Containers[i].ID]; ok {
+						project.Containers[i].CPU = stats.CPU
+						project.Containers[i].Memory = stats.Memory
+						project.Containers[i].NetIO = stats.NetIO
+						project.Containers[i].BlockIO = stats.BlockIO
+					}
+				}
+			}
+		}
+	}
+
+	// Calculate project status
+	for _, project := range projects {
+		running := 0
+		total := len(project.Containers)
+		for _, c := range project.Containers {
+			if strings.ToLower(c.State) == "running" {
+				running++
+			}
+		}
+
+		if running == total {
+			project.Status = AllRunning
+		} else if running == 0 {
+			project.Status = AllStopped
+		} else {
+			project.Status = SomeStopped
+		}
+	}
+
+	return projects, nil
+}
+
+// parseLabels parses Docker's comma-separated label format into a map
+// Format: "key1=value1,key2=value2"
+// Handles edge cases like commas in values and empty strings
+func parseLabels(labelsStr string) map[string]string {
+	labels := make(map[string]string)
+	if labelsStr == "" {
+		return labels
+	}
+
+	// Split by comma, but be careful of escaped commas
+	parts := strings.Split(labelsStr, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Split on first = only
+		idx := strings.Index(part, "=")
+		if idx == -1 {
+			continue
+		}
+
+		key := strings.TrimSpace(part[:idx])
+		value := strings.TrimSpace(part[idx+1:])
+		labels[key] = value
+	}
+
+	return labels
+}
