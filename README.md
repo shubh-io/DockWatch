@@ -26,7 +26,7 @@ Think of `htop`, but for Docker.
 - See live container stats at a glance
 - Start, stop, restart, and remove containers with single keypresses
 - Jump into logs or an interactive shell instantly
-
+- Change Runtime (switch Docker ⇄ Podman)
 ---
 
 ## Comparison
@@ -34,70 +34,79 @@ Think of `htop`, but for Docker.
 
 ### DockMate vs LazyDocker
 
-
 | Feature | DockMate | LazyDocker |
 |---------|----------|------------|
 | **Installation** | One-command + Homebrew | Homebrew + Multiple package managers |
 | **Auto-update** | ✅ Built-in (`dockmate update`) | ❌ Manual updates required |
-| **Container loading** | ✅ **Fast (2 seconds)** | Slower (variable) |
-| **UI Framework** | ✅ **Bubble Tea (new)** | gocui (older library) |
+| **Container loading** | ✅ **Fast (< 2 seconds)** | Slower (variable) |
+| **UI Framework** | ✅ **Bubble Tea (modern)** | gocui (older library) |
 | **Dependencies** | ✅ **Minimal** (bash, curl) | Multiple system dependencies |
+| **Resource usage** | ✅ **Lightweight** | Heavier footprint |
 | **Container stats** | ✅ Real-time (CPU, memory, network, disk I/O) | Real-time + ASCII graphs |
+| **Docker Compose** | ✅ Full support | ✅ Full support |
 | **Interactive logs** | ✅ | ✅ |
 | **Shell access** | ✅ One keypress | ✅ |
-| **Docker Compose** | ✅ | ✅ |
+| **Multi-runtime support** | ✅ **Docker + Podman (native)** | Docker only (Podman via workaround) |
+| **Runtime switching** | ✅ **In TUI settings** | ❌ Restart + change env vars |
+| **Podman Compose** | ✅ **Auto-detected** | ⚠️ Manual configuration |
 | **Image management** | ⏳ Planned | ✅ Layer inspection & pruning |
 | **Metrics graphs** | ❌ Text-based (lighter) | ✅ Customizable ASCII graphs |
 | **Mouse support** | ❌ Keyboard-focused | ✅ |
-| **Resource usage** | ✅ **Lightweight** | Heavier footprint |
-| **Best for** | Speed, simplicity, modern workflows | Feature-rich power users |
-
-
+| **Best for** | Speed, simplicity, **+ Podman support** | Feature-rich Docker power users |
 
 </div>
 
-### When to use DockMate?
+### Choose DockMate if you:
+- ⚡ Want a **fast, lightweight** Docker TUI
+- ⌨️ Prefer **keyboard-driven** workflows
+- 📦 Value **simplicity** and **auto-updates**
+- 🔄 **Bonus:** Need Podman support (native, zero config)
 
-- ✅ You want a modern, lightweight, and fast TUI
-- ✅ You prefer keyboard-driven workflows
-- ✅ You need quick container monitoring over SSH
-- ✅ You want one-command install with auto-updates
-- ✅ You value simplicity over features
+### Choose LazyDocker if you:
+- 📊 Need **ASCII graphs** and visualizations
+- 🔍 Want **image layer inspection**
+- 🖱️ Prefer **mouse support**
+- 🏆 Want a **mature, battle-tested** tool
 
-### When to use LazyDocker?
-
-- ✅ You need Docker Compose management
-- ✅ You want metrics graphs and visualizations
-- ✅ You need image layer inspection
-- ✅ You prefer mouse support
-- ✅ You want a mature tool
-
-
-**Both are great tools - choose based on your workflow!** 🐳
-
+**Both are excellent - DockMate for speed & simplicity, LazyDocker for advanced features!** 🐳
 
 ---
 
 ## Features
 
-- Live container metrics: CPU, memory, PIDs, network I/O, block I/O
-- Start / stop / restart containers
-- View recent logs
-- Open an interactive shell inside a container
+### 🐳 Docker Management
+- Docker and Docker Compose support
+- Live metrics (CPU, memory, network I/O, disk I/O)
+- Start/stop/restart with one keypress
+- Real-time log streaming
+- Interactive shell access
 - Sort by any column
-- Auto-refresh every 2 seconds
-- Fully keyboard-driven (no mouse)
-- Resizes cleanly with your terminal
 
----
+### ⚡ Performance & UX
+- Fast startup 
+- Lightweight 
+- Fully keyboard-driven
+- Persistent settings (`~/.config/dockmate/config.yml`)
+- Configurable auto-refresh
+- Clean terminal resizing
 
+### 🚀 Bonus: Multi-Runtime Support
+- Native Podman support
+- Runtime switching (Docker ⇄ Podman)
+- Supports Podman Compose
+- Helpful error guidance for Podman setup
 
 ## Requirements
 
-- Docker installed and running
-- Linux or macOS
+### Runtime
+- **Docker** (recommended) or **Podman** installed and running
 
-- Go 1.24+ **only if** building from source
+### Operating System
+- **Linux** (Ubuntu, Debian, Fedora, Arch, etc.)
+- **macOS**
+
+### Building from Source (optional)
+- **Go 1.24+** required
 
 ---
 
@@ -244,6 +253,20 @@ dockmate --version
 | `q` or `Ctrl+C`   | Quit                            |
 
 ---
+
+## Changing runtime 🛠️
+
+You can switch DockMate's container runtime (Docker ⇄ Podman) in two ways:
+
+- In the TUI: open the Settings panel, change the **Runtime** option to `docker` or `podman`, then save - the new value is persisted to your config and applied after the app restarts.
+- From the command line: run the interactive runtime selector:
+
+```
+dockmate --runtime
+```
+
+This will show a list selector (Docker / Podman) that saves your choice to `~/.config/dockmate/config.yml` (or `$XDG_CONFIG_HOME/dockmate/config.yml`), and you can then restart DockMate normally.
+
 
 ## Verifying downloads (optional)
 
