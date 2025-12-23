@@ -51,7 +51,7 @@ func (m model) renderHelp(width int) string {
 				{"X", "Stop selected container"},
 				{"R", "Restart selected container"},
 				{"D", "Remove selected container"},
-				{"E", "Open interactive shell (bash/sh)"},
+				{"E", fmt.Sprintf("Open interactive shell (%s)", m.settings.Shell)},
 			},
 		},
 		{

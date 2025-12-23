@@ -59,11 +59,15 @@ const (
 	RuntimePodman ContainerRuntime = "podman"
 )
 
+// available shell options for container exec
+var ShellOptions = []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/ash"}
+
 // app settings
 type Settings struct {
 	ColumnPercents  []int
 	RefreshInterval int
-	Runtime         ContainerRuntime // runtime
+	Runtime         ContainerRuntime
+	Shell           string
 }
 
 // which column to sort by

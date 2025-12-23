@@ -48,7 +48,7 @@ func (m model) renderSettings(width int) string {
 	}
 	b.WriteString("\n")
 
-	// // runtime row (index 10)
+	// runtime row (index 10)
 	b.WriteString("\n")
 	runtime := fmt.Sprintf("Runtime: %s", m.settings.Runtime)
 	if m.settingsSelected == 10 {
@@ -58,6 +58,17 @@ func (m model) renderSettings(width int) string {
 	}
 	b.WriteString("\n")
 	b.WriteString(normalStyle.Render("Changing the runtime will trigger a RESTART!"))
+
+	// shell row (index 11)
+	b.WriteString("\n\n")
+	shellLine := fmt.Sprintf("Shell: %s", m.settings.Shell)
+	if m.settingsSelected == 11 {
+		b.WriteString(selectedStyle.Render(padRight(shellLine, width)))
+	} else {
+		b.WriteString(normalStyle.Render(padRight(shellLine, width)))
+	}
+	b.WriteString("\n")
+	b.WriteString(normalStyle.Render("Shell used for container exec (fallback: /bin/sh)"))
 
 	b.WriteString("\n")
 	instr := "[←/→] or [+/-] adjust  •  [↑/↓] navigate • [s] save  •   [Esc] cancel"

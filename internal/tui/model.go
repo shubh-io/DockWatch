@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func InitialModel() model {
 			ColumnPercents:  columnPercents,
 			RefreshInterval: cfg.Performance.PollRate,
 			Runtime:         ContainerRuntime(cfg.Runtime.Type),
+			Shell:           cfg.Exec.Shell,
 		},
 		suspendRefresh:   false,
 		settingsSelected: 0,
@@ -521,7 +523,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "down", "j":
-				if m.settingsSelected < 10 {
+				if m.settingsSelected < 11 {
 					m.settingsSelected++
 				}
 				return m, nil
@@ -544,6 +546,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.settings.Runtime = RuntimeDocker
 					}
+				} else if m.settingsSelected == 11 {
+					// cycle shell options backward
+					idx := slices.Index(ShellOptions, m.settings.Shell)
+					m.settings.Shell = ShellOptions[(idx-1+len(ShellOptions))%len(ShellOptions)]
 				}
 				return m, nil
 			case "right", "l", "+":
@@ -562,6 +568,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.settings.Runtime = RuntimeDocker
 					}
+				} else if m.settingsSelected == 11 {
+					// cycle shell options forward
+					idx := slices.Index(ShellOptions, m.settings.Shell)
+					m.settings.Shell = ShellOptions[(idx+1)%len(ShellOptions)]
 				}
 				return m, nil
 			case "s", "S":
@@ -587,6 +597,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					},
 					Runtime: config.RuntimeConfig{
 						Type: string(m.settings.Runtime),
+					},
+					Exec: config.ExecConfig{
+						Shell: m.settings.Shell,
 					},
 				}
 
@@ -880,8 +893,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if container != nil && container.State == "running" {
 				containerID := container.ID
 				m.statusMessage = "Opening interactive shell..."
-
-				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec %s exec -it %s /bin/sh", string(m.settings.Runtime), containerID)
+				// Falls back to /bin/sh if configured shell is not available in container
+				shell := m.settings.Shell
+				shellCmd := fmt.Sprintf("if [ -x %s ]; then exec %s; else exec /bin/sh; fi", shell, shell)
+				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec %s exec -it %s sh -c '%s'", string(m.settings.Runtime), containerID, shellCmd)
 				c := exec.Command("bash", "-lc", cmdStr)
 				return m, tea.ExecProcess(c, func(err error) tea.Msg {
 					if err != nil {

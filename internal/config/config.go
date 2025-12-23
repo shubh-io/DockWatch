@@ -13,6 +13,7 @@ type Config struct {
 	Layout      LayoutConfig      `yaml:"layout"`
 	Performance PerformanceConfig `yaml:"performance"`
 	Runtime     RuntimeConfig     `yaml:"runtime"`
+	Exec        ExecConfig        `yaml:"exec"`
 }
 
 type LayoutConfig struct {
@@ -32,8 +33,12 @@ type PerformanceConfig struct {
 }
 
 type RuntimeConfig struct {
-	Type   string `yaml:"type"`   //  "docker" or "podman"
+	Type   string `yaml:"type"`   // "docker" or "podman"
 	Socket string `yaml:"socket"` // custom socket path (would add in future)
+}
+
+type ExecConfig struct {
+	Shell string `yaml:"shell"` // preferred shell for container exec
 }
 
 // Default config
@@ -66,6 +71,9 @@ func DefaultConfig() *Config {
 			Type: "docker",
 			// optional, would add support later for custom sockets
 			Socket: "",
+		},
+		Exec: ExecConfig{
+			Shell: "/bin/sh",
 		},
 	}
 }
@@ -109,6 +117,11 @@ func Load() (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		// If YAML is invalid, return default config
 		return DefaultConfig(), nil
+	}
+
+	// Apply defaults for missing fields
+	if cfg.Exec.Shell == "" {
+		cfg.Exec.Shell = "/bin/sh"
 	}
 
 	return cfg, nil
