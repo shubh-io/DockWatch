@@ -1,7 +1,7 @@
 package version
 
 // Current application version, would update this when releasing a new version.
-const Dockmate_Version = "0.0.13"
+const Dockmate_Version = "0.0.14"
 
 // Repository to check for releases (owner/repo)
 const Repo = "shubh-io/dockmate"
