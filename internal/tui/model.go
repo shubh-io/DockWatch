@@ -2,13 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,148 +16,6 @@ import (
 	"github.com/shubh-io/dockmate/internal/docker"
 )
 
-// ============================================================================
-
-var (
-	// color palette
-	// main accents
-	accent = lipgloss.Color("#22D3EE")
-
-	// text colors
-	textPrimary   = lipgloss.Color("#F8FAFC") // near white
-	textSecondary = lipgloss.Color("#94A3B8")
-	textMuted     = lipgloss.Color("#475569")
-
-	// backgrounds
-	borderColor = lipgloss.Color("#334155")
-
-	// status colors
-	yellowColor = lipgloss.Color("#F59E0B") // warnings/actions
-	cyanColor   = lipgloss.Color("#06B6D4") // selected
-
-	// others
-	meterGreen = lipgloss.Color("#4ADE80") // bright green for bars
-	meterRed   = lipgloss.Color("#F87171") // bright red for bars
-
-	// title style
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(accent).
-			Padding(0, 1)
-
-	// app name
-	appNameStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(textPrimary)
-
-	// meter styles
-	meterLabelStyle = lipgloss.NewStyle().
-			Foreground(cyanColor).
-			Bold(true)
-
-	meterBracketStyle = lipgloss.NewStyle().
-				Foreground(textMuted)
-
-	infoLabelStyle = lipgloss.NewStyle().
-			Foreground(textSecondary)
-
-	infoValueStyle = lipgloss.NewStyle().
-			Foreground(textPrimary).
-			Bold(true)
-
-	// table header
-	headerStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#000000")).
-			Background(meterGreen)
-
-	// selected row
-	selectedStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#000000")).
-			Background(cyanColor)
-
-	// container states
-	runningStyle = lipgloss.NewStyle().
-			Foreground(meterGreen).
-			Bold(true)
-
-	stoppedStyle = lipgloss.NewStyle().
-			Foreground(meterRed)
-
-	pausedStyle = lipgloss.NewStyle().
-			Foreground(yellowColor)
-
-	normalStyle = lipgloss.NewStyle().
-			Foreground(textSecondary)
-
-	// footer
-	footerKeyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#000000")).
-			Background(cyanColor).
-			Bold(true).
-			Padding(0, 0)
-
-	footerDescStyle = lipgloss.NewStyle().
-			Foreground(textPrimary).
-			Padding(0, 0)
-
-	footerArrowStyle = lipgloss.NewStyle().
-				Foreground(yellowColor).
-				Bold(true)
-
-	// message
-	messageStyle = lipgloss.NewStyle().
-			Foreground(yellowColor).
-			Bold(true)
-
-	// divider
-	dividerStyle = lipgloss.NewStyle().
-			Foreground(borderColor)
-)
-
-// debug logger writes snapshots to a file (dockmate-debug.log) by default
-var (
-	debugLogger *log.Logger
-	debugFile   *os.File
-)
-
-// init sets up file-backed debug logging. If the file can't be opened,
-// debugLogger falls back to discarding output.
-func init() {
-	// default debug file in working directory
-	_ = SetDebugFile("dockmate-debug.log")
-}
-
-// SetDebugFile opens (or creates) the given path and directs debug output there.
-// It returns an error if the file cannot be opened.
-func SetDebugFile(path string) error {
-	if debugFile != nil {
-		_ = debugFile.Close()
-		debugFile = nil
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		// fallback to discard
-		debugLogger = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
-		return err
-	}
-	debugFile = f
-	debugLogger = log.New(debugFile, "DEBUG: ", log.LstdFlags)
-	return nil
-}
-
-// CloseDebug closes the current debug file (if any) and disables logging.
-func CloseDebug() error {
-	if debugFile == nil {
-		return nil
-	}
-	err := debugFile.Close()
-	debugFile = nil
-	debugLogger = log.New(io.Discard, "DEBUG: ", log.LstdFlags)
-	return err
-}
-
 // layout sizing constants
 const (
 	HEADER_HEIGHT        = 8
@@ -169,127 +24,28 @@ const (
 	INFO_PANEL_HEIGHT    = 16
 )
 
-// ============================================================================
-// App state (bubble tea model)
-// ============================================================================
-
-// model holds everything for the TUI
-type model struct {
-	containers           []docker.Container                // all containers (running + stopped)
-	projects             map[string]*docker.ComposeProject // compose projects
-	expandedProjects     map[string]bool                   // track which projects are expanded
-	flatList             []treeRow                         // flattened tree for rendering
-	cursor               int                               // selected container index
-	page                 int                               // current page
-	maxContainersPerPage int                               // containers per page (dynamic)
-	terminalWidth        int                               // terminal width
-	terminalHeight       int                               // terminal height
-	err                  error                             // last error
-	loading              bool                              // fetching data?
-	message              string                            // page indicator (persistent)
-	statusMessage        string                            // transient status message
-	startTime            time.Time                         // when app started
-	logsVisible          bool                              // logs panel visible?
-	logPanelHeight       int                               // height of logs panel
-	logsLines            []string                          // log lines
-	logsContainer        string                            // container id for logs
-	infoVisible          bool                              // info panel visible?
-	infoPanelHeight      int                               // height of info panel
-	infoContainer        *docker.Container                 // container for info display
-	sortBy               sortColumn                        // which column to sort by
-	sortAsc              bool                              // sort direction
-	columnMode           bool                              // column nav mode (vs row nav)
-	selectedColumn       int                               // selected column (0-8)
-	currentMode          appMode                           // current UI mode
-
-	// settings
-	settings         Settings // user configurable settings
-	composeViewMode  bool     // currently selected compose view row
-	suspendRefresh   bool     // when true, suspend background refreshes of containers
-	settingsSelected int      // which settings row/column is selected in settting mdoe
-}
-
-// treeRow represents a row in the flattened tree
-type treeRow struct {
-	isProject   bool
-	projectName string
-	container   *docker.Container
-	indent      int
-	running     int // for project rows
-	total       int // for project rows
-}
-
-// runtime
-type ContainerRuntime string
-
-const (
-	RuntimeDocker ContainerRuntime = "docker"
-	RuntimePodman ContainerRuntime = "podman"
-)
-
-// app settings
-type Settings struct {
-	ColumnPercents  []int            // percent allocation for each column aprx sum to 100
-	RefreshInterval int              // seconds between auto refresh ticks
-	Runtime         ContainerRuntime // runtime
-}
-
-// which column to sort by
-type sortColumn int
-
-const (
-	sortByID sortColumn = iota
-	sortByName
-	sortByMemory
-	sortByCPU
-	sortByNetIO
-	sortByBlockIO
-	sortByImage
-	sortByStatus
-	sortByPorts
-)
-
-// which mode the TUI is in
-type appMode int
-
-const (
-	modeNormal appMode = iota
-	modeColumnSelect
-	modeLogs
-	modeInfo
-	modeSettings
-	modeComposeView
-	modeHelp
-)
-
-// ============================================================================
-// Initialization
-// ============================================================================
-
-// set up initial state
 func InitialModel() model {
 	// Load configuration from file
 	cfg, _ := config.Load()
 
-	// Map config layout to column percentages (all 9 columns)
 	columnPercents := []int{
-		cfg.Layout.ContainerId,        // CONTAINER ID
-		cfg.Layout.ContainerNameWidth, // NAME
-		cfg.Layout.MemoryWidth,        // MEMORY
-		cfg.Layout.CPUWidth,           // CPU
-		cfg.Layout.NetIOWidth,         // NET I/O
-		cfg.Layout.DiskIOWidth,        // Disk I/O
-		cfg.Layout.ImageWidth,         // IMAGE
-		cfg.Layout.StatusWidth,        // STATUS
-		cfg.Layout.PortWidth,          // PORTS
+		cfg.Layout.ContainerId,
+		cfg.Layout.ContainerNameWidth,
+		cfg.Layout.MemoryWidth,
+		cfg.Layout.CPUWidth,
+		cfg.Layout.NetIOWidth,
+		cfg.Layout.DiskIOWidth,
+		cfg.Layout.ImageWidth,
+		cfg.Layout.StatusWidth,
+		cfg.Layout.PortWidth,
 	}
 	// runtime load
 
 	return model{
-		loading:              true,       // start loading
-		startTime:            time.Now(), // track uptime
-		page:                 0,          // first page
-		maxContainersPerPage: 12,         // initial guess until resize event
+		loading:              true,
+		startTime:            time.Now(),
+		page:                 0,
+		maxContainersPerPage: 12,
 		terminalWidth:        0,
 		terminalHeight:       0,
 		projects:             make(map[string]*docker.ComposeProject),
@@ -297,14 +53,15 @@ func InitialModel() model {
 		flatList:             []treeRow{},
 		logsVisible:          false, // logs hidden by default
 		logPanelHeight:       LOG_PANEL_HEIGHT,
-		infoVisible:          false, // info hidden by default
+		infoVisible:          false,
 		infoPanelHeight:      INFO_PANEL_HEIGHT,
 		infoContainer:        nil,
-		sortBy:               sortByStatus, // sort by status as default
-		sortAsc:              false,        // descending
-		columnMode:           false,        // row nav mode
-		selectedColumn:       7,            // status column
-		currentMode:          modeNormal,   // start in normal mode
+		sortBy:               sortByStatus,
+		sortAsc:              false, // descending
+		columnMode:           false,
+		selectedColumn:       7,
+		currentMode:          modeNormal,
+
 		// Load settings from config file
 		settings: Settings{
 			ColumnPercents:  columnPercents,
@@ -319,81 +76,12 @@ func InitialModel() model {
 // called once at startup
 // kicks off container fetch and timer
 func (m model) Init() tea.Cmd {
-	// start fetch and schedule tick based on settings
+
 	return tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 }
 
-// ============================================================================
-// Message types
-// ============================================================================
-
-// sent when docker action finishes
-type actionDoneMsg struct {
-	err error // nil if ok
-}
-
-// sent every 2 seconds for refresh
-type tickMsg time.Time
-
-// sent when compose projects are fetched
-type composeProjectsMsg struct {
-	Projects map[string]*docker.ComposeProject
-	Err      error
-}
-
-// ============================================================================
-// Async commands
-// ============================================================================
-
-// grab container list in background
-func fetchContainers() tea.Cmd {
-	return func() tea.Msg {
-		containers, err := docker.ListContainers()
-		return docker.ContainersMsg{Containers: containers, Err: err}
-	}
-}
-
-// fetch compose projects asynchronously
-func fetchComposeProjects() tea.Cmd {
-	return func() tea.Msg {
-		projects, err := docker.FetchComposeProjects()
-		return composeProjectsMsg{Projects: projects, Err: err}
-	}
-}
-
-// fire every 2 seconds for auto-refresh
-func tickCmd(d time.Duration) tea.Cmd {
-	if d < time.Second {
-		d = 1 * time.Second
-	}
-	return tea.Tick(d, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
-}
-
-// run docker action in background (start/stop/etc)
-func doAction(action, containerID string) tea.Cmd {
-	return func() tea.Msg {
-		err := docker.DoAction(action, containerID)
-		return actionDoneMsg{err: err}
-	}
-}
-
-// fetch logs for a container
-func fetchLogsCmd(id string) tea.Cmd {
-	return func() tea.Msg {
-		lines, err := docker.GetLogs(id)
-		return docker.LogsMsg{ID: id, Lines: lines, Err: err}
-	}
-}
-
-// ============================================================================
-// Sorting
-// ============================================================================
-
 // sort containers by current column and direction
 func (m *model) sortContainers() {
-	// helper to compare two containers according to current sort settings
 	lessContainer := func(a, b docker.Container) bool {
 
 		switch m.sortBy {
@@ -459,90 +147,6 @@ func (m *model) sortContainers() {
 			m.buildFlatList()
 		}
 	}
-}
-
-// convert "0.48%" to 0.48
-func parsePercent(s string) float64 {
-	s = strings.TrimSpace(s)
-	s = strings.TrimSuffix(s, "%")
-	val, _ := strconv.ParseFloat(s, 64)
-	return val
-}
-
-// parseNetIO parses a string like "1.2kB / 3.4kB" and returns total bytes
-func parseNetIO(s string) float64 {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "─" {
-		return 0
-	}
-	parts := strings.Split(s, "/")
-	if len(parts) == 0 {
-		return 0
-	}
-	total := 0.0
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		v := parseSize(p)
-		total += v
-	}
-	return total
-}
-
-// parseSize parses a human-readable size like "1.2kB" or "3MiB" into bytes.
-func parseSize(s string) float64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	// remove possible commas
-	s = strings.ReplaceAll(s, ",", "")
-	// split number and unit
-	num := ""
-	unit := ""
-	for i, r := range s {
-		if (r >= '0' && r <= '9') || r == '.' || r == '-' {
-			num += string(r)
-		} else {
-			unit = strings.TrimSpace(s[i:])
-			break
-		}
-	}
-	if num == "" {
-		return 0
-	}
-	val, err := strconv.ParseFloat(num, 64)
-	if err != nil {
-		return 0
-	}
-	unit = strings.ToLower(strings.TrimSpace(unit))
-	switch unit {
-	case "b", "bytes", "byte", "":
-		return val
-	case "kb", "kib":
-		return val * 1000
-	case "mb", "mib":
-		return val * 1000 * 1000
-	case "gb", "gib":
-		return val * 1000 * 1000 * 1000
-	default:
-		// fallback: if unit ends with b (e.g., kB) treat as *1000
-		if strings.HasSuffix(unit, "b") {
-			prefix := strings.TrimSuffix(unit, "b")
-			if prefix == "k" {
-				return val * 1000
-			}
-			if prefix == "m" {
-				return val * 1000 * 1000
-			}
-			if prefix == "g" {
-				return val * 1000 * 1000 * 1000
-			}
-		}
-	}
-	return val
 }
 
 // calculateMaxContainers determines how many containers fit on screen given current layout state
@@ -698,13 +302,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMessage = "Action completed successfully"
 		}
-		// refresh list
+
 		return m, fetchContainers()
 
 	case tickMsg:
-		// wakey wakey - time to refresh
-		// always refresh container list, if logs panel is open, also refresh logs
-		// suspend refresh/fetching containers if in settings mode
+
 		if m.suspendRefresh {
 			return m, tickCmd(time.Duration(m.settings.RefreshInterval) * time.Second)
 		}
@@ -721,7 +323,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// keyboard input
 		m.statusMessage = ""
 
-		// Handle Escape key to return to normal mode
 		if msg.String() == "esc" {
 			if m.columnMode {
 				m.columnMode = false
@@ -746,9 +347,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// special keys that work in both modes
 		switch msg.String() {
-		// for debugging: press backtick (`) to dump a state snapshot to the debug logger
+
 		case "`":
 			debugLogger.Printf(
 				"STATE SNAPSHOT: width=%d height=%d page=%d cursor=%d perPage=%d selectedColumn=%d",
@@ -818,7 +418,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "l", "L":
-			// Toggle logs panel for selected container
+
 			var containerID string
 			if m.infoVisible {
 				return m, nil
@@ -834,13 +434,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if containerID != "" {
 				if m.logsVisible {
-					// Close logs panel
 					m.logsVisible = false
 					m.currentMode = modeNormal
 					m.statusMessage = "Logs closed"
 					m.updatePagination()
 				} else {
-					// Open logs panel and fetch logs
 					m.logsVisible = true
 					m.currentMode = modeLogs
 					m.statusMessage = "Fetching logs..."
@@ -851,9 +449,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter":
-			// in column mode, sort by selected column
+
 			if m.columnMode {
-				// map column index to sort enum
 				var col sortColumn
 				var canSort bool = true
 				switch m.selectedColumn {
@@ -878,7 +475,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				if canSort {
-					// toggle direction if same column, else reset
+
 					if m.sortBy == col {
 						m.sortAsc = !m.sortAsc
 					} else {
@@ -887,7 +484,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.sortContainers()
 
-					// show feedback
 					dir := "asc"
 					if !m.sortAsc {
 						dir = "desc"
@@ -899,7 +495,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "left", "h":
-			// In column mode, move selection left
+
 			if m.columnMode {
 				if m.selectedColumn > 0 {
 					m.selectedColumn--
@@ -908,16 +504,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "right":
-			// In column mode, move selection right
+
 			if m.columnMode {
-				if m.selectedColumn < 8 { // 0-8 for 9 columns
+				if m.selectedColumn < 8 {
 					m.selectedColumn++
 				}
 				return m, nil
 			}
 		}
 
-		// If we're in settings mode, handle settings navigation and edits
 		if m.currentMode == modeSettings {
 			switch msg.String() {
 			case "up", "k":
@@ -926,7 +521,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "down", "j":
-				// now support 11 rows
 				if m.settingsSelected < 10 {
 					m.settingsSelected++
 				}
@@ -940,7 +534,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.settings.ColumnPercents[m.settingsSelected]--
 					}
 				} else if m.settingsSelected == 9 {
-					// adjust refresh interval (min 1s)
 					if m.settings.RefreshInterval > 1 {
 						m.settings.RefreshInterval--
 					}
@@ -960,13 +553,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settingsSelected >= 0 && m.settingsSelected <= 8 {
 					m.settings.ColumnPercents[m.settingsSelected]++
 				} else if m.settingsSelected == 9 {
-					// increase refresh interval (cap at 300s)
 					if m.settings.RefreshInterval < 300 {
 						m.settings.RefreshInterval++
 					}
-					// test feature -
 				} else if m.settingsSelected == 10 {
-					// toggle runtime option
 					if m.settings.Runtime == RuntimeDocker {
 						m.settings.Runtime = RuntimePodman
 					} else {
@@ -1000,7 +590,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					},
 				}
 
-				// Save to file
+				// Save to config
 				if err := cfg.Save(); err != nil {
 					m.statusMessage = fmt.Sprintf("Failed to save config: %v", err)
 				} else {
@@ -1036,7 +626,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentMode = modeNormal
 					m.suspendRefresh = false
 					m.statusMessage = "Settings saved!"
-					// apply new interval immediately and refresh once
 					return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 				}
 				return m, nil
@@ -1054,11 +643,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, Keys.Up):
-			// Move cursor up (only in row mode)
 			if !m.columnMode {
 				if m.composeViewMode {
 					if len(m.flatList) > 0 {
-						// in compose view mode, move cursor up tree
 						m.moveCursorUpTree()
 					}
 				} else {
@@ -1078,7 +665,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, Keys.Down):
-			// Move cursor down (only in row mode)
 			if !m.columnMode {
 				if m.composeViewMode {
 					if len(m.flatList) > 0 {
@@ -1096,7 +682,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, Keys.PageUp):
-			// Go to previous page (left arrow)
 			if m.page > 0 {
 				m.page--
 				if m.maxContainersPerPage > 0 {
@@ -1197,13 +782,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePagination()
 			return m, fetchContainers()
 
-		// Toggle compose view mode using C
 		case msg.String() == "c", msg.String() == "C":
-			// Toggle compose view mode
 			m.composeViewMode = !m.composeViewMode
 			m.currentMode = modeComposeView
 			if m.composeViewMode {
-				// Entering compose view
 				m.statusMessage = "Switched to Compose view "
 				m.expandedProjects = make(map[string]bool)
 				m.expandedProjects["Standalone Containers"] = true
@@ -1298,7 +880,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if container != nil && container.State == "running" {
 				containerID := container.ID
 				m.statusMessage = "Opening interactive shell..."
-				// Use bash to clear terminal and exec into container shell
+
 				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec %s exec -it %s /bin/sh", string(m.settings.Runtime), containerID)
 				c := exec.Command("bash", "-lc", cmdStr)
 				return m, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -1312,7 +894,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, Keys.Restart):
 			// Restart selected container
 			if m.composeViewMode {
-				// In compose view mode, get container from flatList
+
 				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
 					container := m.flatList[m.cursor].container
 					m.statusMessage = "Restarting container..."
@@ -1356,12 +938,10 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
-	// If in settings mode, render settings in fullscreen to save some performance and get rid of render bugs
 	if m.currentMode == modeSettings {
 		return m.renderSettings(m.terminalWidth)
 	}
 
-	// If in help mode, render help in fullscreen
 	if m.currentMode == modeHelp {
 		return m.renderHelp(m.terminalWidth)
 	}
@@ -1380,9 +960,6 @@ func (m model) View() string {
 	b.WriteString(titleBar)
 	b.WriteString("\n")
 
-	// stats section (running/stopped bars)
-
-	// count by state
 	running := 0
 	stopped := 0
 	for _, c := range m.containers {
@@ -1399,15 +976,10 @@ func (m model) View() string {
 	b.WriteString(statsSection)
 	b.WriteString("\n")
 
-	// table header
+	usableWidth := width - 2
 
-	// column widths - compute with smart allocation to prevent overflow
-	usableWidth := width - 2 // account for padding and separators
-
-	// define minimum widths for each column
 	mins := []int{13, 17, 8, 6, 10, 11, 11, 13, 15}
 
-	// get user-defined percents; fall back to defaults if malformed
 	percents := m.settings.ColumnPercents
 	if len(percents) != 9 {
 		percents = []int{8, 14, 6, 6, 10, 12, 11, 13, 15}
@@ -1435,12 +1007,6 @@ func (m model) View() string {
 			}
 		}
 	}
-	// debugLogger.Printf(
-	// 	"width=%d usableWidth=%d allocated=%d widths=%v specs=%+v",
-	// 	width, usableWidth, allocated, widths, specs,
-	// )
-
-	// assign to individual variables
 	idW := widths[0]
 	nameW := widths[1]
 	memoryW := widths[2]
@@ -1451,11 +1017,6 @@ func (m model) View() string {
 	statusW := widths[7]
 	portsW := widths[8]
 
-	// debugLogger.Printf(
-	// 	"Column widths: ID=%d NAME=%d MEMORY=%d CPU=%d NET I/O=%d Disk I/O=%d IMAGE=%d STATUS=%d PORTS=%d",
-	// 	idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW,
-	// )
-	// sort indicator (▲/▼)
 	sortIndicator := func(col sortColumn) string {
 		if m.sortBy == col {
 			if m.sortAsc {
@@ -1472,8 +1033,7 @@ func (m model) View() string {
 	// buildColumn builds a complete cell with spacing, padding, and title
 	buildColumn := func(colIdx int, title string, width int, indicator string) string {
 		text := title + indicator
-		// Pad to width (width includes the space before the column)
-		// Use visibleLen to account for multi-byte/ANSI characters so padding stays correct
+
 		paddingNeeded := width - visibleLen(text)
 		if paddingNeeded > 0 {
 			text += strings.Repeat(" ", paddingNeeded)
@@ -1495,7 +1055,7 @@ func (m model) View() string {
 	col5 := buildColumn(5, "DISK I/O", blockIOW-1, sortIndicator(sortByBlockIO))
 	col6 := buildColumn(6, "IMAGE", imageW-1, sortIndicator(sortByImage))
 	col7 := buildColumn(7, "STATUS", statusW, sortIndicator(sortByStatus))
-	col8 := buildColumn(8, "PORTS", portsW, sortIndicator(sortByPorts)) // last column gets full width
+	col8 := buildColumn(8, "PORTS", portsW, sortIndicator(sortByPorts))
 
 	// combine into header - separators only
 	sepStyle := lipgloss.NewStyle().
@@ -1613,17 +1173,13 @@ func (m model) View() string {
 		b.WriteString("\n")
 	}
 
-	// logs panel (if visible)
-
 	if m.logsVisible && !m.infoVisible {
 		b.WriteString(m.renderLogsPanel(width))
 	}
-	// info panel (if visible)
 	if m.infoVisible && !m.logsVisible {
 		b.WriteString(m.renderInfoPanel(width))
 	}
 
-	// page indicator (persistent) - always render
 	pageLine := m.message
 	if pageLine == "" {
 		pageLine = fmt.Sprintf("Page %d/%d", m.page+1, 1)
@@ -1634,7 +1190,6 @@ func (m model) View() string {
 	b.WriteString(messageStyle.Render(pageLine))
 	b.WriteString("\n")
 
-	// transient status message (if any)
 	if m.statusMessage != "" {
 		sm := m.statusMessage
 		if len(sm) < width {
@@ -1644,7 +1199,6 @@ func (m model) View() string {
 		b.WriteString("\n")
 	}
 
-	// 1-row bottom padding after messages
 	b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
 	b.WriteString("\n")
 
@@ -1677,8 +1231,6 @@ func (m model) renderTitleBar(width int) string {
 	return line
 }
 
-// render running/stopped bars with session info
-// two lines: running bar + info, stopped bar + loading
 func (m model) renderStatsSection(running, stopped, total int, uptime time.Duration, width int) string {
 	var b strings.Builder
 
@@ -1689,7 +1241,6 @@ func (m model) renderStatsSection(running, stopped, total int, uptime time.Durat
 		barWidth = 10
 	}
 
-	// line 1: running bar + session info on right
 	runPct := 0.0
 	if total > 0 {
 		runPct = float64(running) / float64(total)
@@ -1702,7 +1253,6 @@ func (m model) renderStatsSection(running, stopped, total int, uptime time.Durat
 		meterBracketStyle.Render("]"),
 		infoValueStyle.Render(fmt.Sprintf("%d/%d", running, total)))
 
-	// right side: total, uptime, refresh interval
 	infoLine := fmt.Sprintf("%s %s  %s %s  %s %s %s %s",
 		infoLabelStyle.Render("Total:"),
 		infoValueStyle.Render(fmt.Sprintf("%d", total)),
@@ -1713,7 +1263,6 @@ func (m model) renderStatsSection(running, stopped, total int, uptime time.Durat
 		infoLabelStyle.Render("Runtime:"),
 		infoValueStyle.Render(string(m.settings.Runtime)))
 
-	// padding between left and right
 	leftLen := visibleLen(runningLine)
 	rightLen := visibleLen(infoLine)
 	middlePad := width - leftLen - rightLen - 2
@@ -1753,8 +1302,6 @@ func (m model) renderStatsSection(running, stopped, total int, uptime time.Durat
 	return b.String()
 }
 
-// draw a progress bar with filled/empty chars
-// pct is 0.0 to 1.0
 func renderBar(pct float64, width int, fgColor, bgColor lipgloss.Color) string {
 	// clamp percentage
 	if pct < 0 {
@@ -1782,8 +1329,6 @@ func renderBar(pct float64, width int, fgColor, bgColor lipgloss.Color) string {
 	return bar
 }
 
-// get visible length without ansi codes
-// important for width calculations with lipgloss
 func visibleLen(s string) int {
 	count := 0
 	inEscape := false
@@ -1799,8 +1344,6 @@ func visibleLen(s string) int {
 	return count
 }
 
-// truncateToWidth truncates a string to fit within the given visible width
-// preserving ANSI codes and adding ellipsis if truncated
 func truncateToWidth(s string, width int) string {
 	if width < 1 {
 		return ""
@@ -1811,13 +1354,11 @@ func truncateToWidth(s string, width int) string {
 		return s
 	}
 
-	// need to truncate - account for ellipsis
 	targetWidth := width - 1
 	if targetWidth < 1 {
 		return "…"
 	}
 
-	// walk through string counting visible chars
 	visCount := 0
 	inEscape := false
 	result := ""
@@ -1950,312 +1491,6 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 	}
 }
 
-// renderLogsPanel prints a fixed-height logs section respecting the configured panel height
-func (m model) renderLogsPanel(width int) string {
-	var b strings.Builder
-
-	b.WriteString(dividerStyle.Render(strings.Repeat("─", width)))
-	b.WriteString("\n")
-
-	logsTitle := fmt.Sprintf("Logs: %s ", m.logsContainer)
-	if len(logsTitle) < width {
-		logsTitle += strings.Repeat(" ", width-len(logsTitle))
-	}
-	b.WriteString(titleStyle.Render(logsTitle))
-	b.WriteString("\n")
-
-	maxLogLines := m.logPanelHeight - 2 // account for divider and title
-	if maxLogLines < 1 {
-		maxLogLines = 1
-	}
-
-	startLog := 0
-	if len(m.logsLines) > maxLogLines {
-		startLog = len(m.logsLines) - maxLogLines
-	}
-
-	for i := startLog; i < len(m.logsLines); i++ {
-		logLine := m.logsLines[i]
-		if len(logLine) > width-4 {
-			logLine = logLine[:width-7] + "..."
-		}
-		b.WriteString(normalStyle.Render("  " + logLine))
-		b.WriteString("\n")
-	}
-
-	renderedLines := len(m.logsLines) - startLog
-	for i := renderedLines; i < maxLogLines; i++ {
-		b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-// renderInfoPanel prints a fixed-height info section displaying container information
-func (m model) renderInfoPanel(width int) string {
-	var b strings.Builder
-
-	b.WriteString(dividerStyle.Render(strings.Repeat("─", width)))
-	b.WriteString("\n")
-
-	containerName := ""
-	if m.infoContainer != nil && len(m.infoContainer.Names) > 0 {
-		containerName = m.infoContainer.Names[0]
-	}
-	infoTitle := fmt.Sprintf("Container Info: %s ", containerName)
-	if len(infoTitle) < width {
-		infoTitle += strings.Repeat(" ", width-len(infoTitle))
-	}
-	b.WriteString(titleStyle.Render(infoTitle))
-	b.WriteString("\n")
-
-	if m.infoContainer == nil {
-		b.WriteString(normalStyle.Render("  No container selected"))
-		b.WriteString("\n")
-		return b.String()
-	}
-
-	c := m.infoContainer
-
-	// Display container information fields
-	infoFields := []struct {
-		label string
-		value string
-	}{
-		{"Container ID", c.ID},
-		{"Name", containerName},
-		{"Image", c.Image},
-		{"Status", c.Status},
-		{"State", c.State},
-		{"CPU Usage", c.CPU},
-		{"Memory Usage", c.Memory},
-		{"Network I/O", c.NetIO},
-		{"Block I/O", c.BlockIO},
-		{"Ports", c.Ports},
-	}
-
-	// Add compose-specific fields if available
-	if c.ComposeProject != "" {
-		infoFields = append(infoFields, struct {
-			label string
-			value string
-		}{"Compose Project", c.ComposeProject})
-	}
-	if c.ComposeService != "" {
-		infoFields = append(infoFields, struct {
-			label string
-			value string
-		}{"Compose Service", c.ComposeService})
-	}
-
-	maxInfoLines := m.infoPanelHeight - 2 // account for divider and title
-	if maxInfoLines < 1 {
-		maxInfoLines = 1
-	}
-
-	// Render info fields
-	for i := 0; i < len(infoFields) && i < maxInfoLines; i++ {
-		field := infoFields[i]
-		value := field.value
-		if value == "" {
-			value = "─"
-		}
-		// Truncate value if too long
-		maxValueLen := width - len(field.label) - 6
-		if maxValueLen > 0 && len(value) > maxValueLen {
-			value = value[:maxValueLen-3] + "..."
-		}
-		infoLine := fmt.Sprintf("  %s: %s", infoLabelStyle.Render(field.label), infoValueStyle.Render(value))
-		if visibleLen(infoLine) < width {
-			infoLine += strings.Repeat(" ", width-visibleLen(infoLine))
-		}
-		b.WriteString(normalStyle.Render(infoLine))
-		b.WriteString("\n")
-	}
-
-	// Fill remaining lines with empty space
-	renderedLines := len(infoFields)
-	if renderedLines > maxInfoLines {
-		renderedLines = maxInfoLines
-	}
-	for i := renderedLines; i < maxInfoLines; i++ {
-		b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-func (m model) renderSettings(width int) string {
-	var b strings.Builder
-
-	title := titleStyle.Render("┌─ Settings 🛠️─┐")
-	padding := (width - visibleLen(title)) / 2
-	if padding < 0 {
-		padding = 0
-	}
-	header := strings.Repeat(" ", padding) + title
-	if visibleLen(header) < width {
-		header += strings.Repeat(" ", width-visibleLen(header))
-	}
-	b.WriteString(header)
-	b.WriteString("\n")
-
-	// Column list
-	colNames := []string{"CONTAINER ID", "NAME", "MEMORY", "CPU", "NET I/O", "Disk I/O", "IMAGE", "STATUS", "PORTS"}
-	if m.settings.ColumnPercents == nil || len(m.settings.ColumnPercents) != 9 {
-		m.settings.ColumnPercents = []int{8, 14, 6, 6, 10, 12, 18, 13, 13}
-	}
-
-	for i, name := range colNames {
-		pct := m.settings.ColumnPercents[i]
-		line := fmt.Sprintf(" %2d%%  %s", pct, name)
-		if m.settingsSelected == i {
-			// highlight selected
-			b.WriteString(selectedStyle.Render(padRight(line, width)))
-		} else {
-			b.WriteString(normalStyle.Render(padRight(line, width)))
-		}
-		b.WriteString("\n")
-	}
-
-	// Refresh interval row (index 9)
-	b.WriteString("\n")
-	refreshLine := fmt.Sprintf(" %2ds  Refresh Interval", m.settings.RefreshInterval)
-	if m.settingsSelected == 9 {
-		b.WriteString(selectedStyle.Render(padRight(refreshLine, width)))
-	} else {
-		b.WriteString(normalStyle.Render(padRight(refreshLine, width)))
-	}
-	b.WriteString("\n")
-
-	// // runtime row (index 10)
-	b.WriteString("\n")
-	runtime := fmt.Sprintf("Runtime: %s", m.settings.Runtime)
-	if m.settingsSelected == 10 {
-		b.WriteString(selectedStyle.Render(padRight(runtime, width)))
-	} else {
-		b.WriteString(normalStyle.Render(padRight(runtime, width)))
-	}
-	b.WriteString("\n")
-	b.WriteString(normalStyle.Render("Changing the runtime will trigger a RESTART!"))
-
-	b.WriteString("\n")
-	instr := "[←/→] or [+/-] adjust  •  [↑/↓] navigate • [s] save  •   [Esc] cancel"
-	if visibleLen(instr) < width {
-		instr += strings.Repeat(" ", width-visibleLen(instr))
-	}
-	b.WriteString(infoValueStyle.Render(instr))
-	b.WriteString("\n")
-
-	return b.String()
-}
-
-// renderHelp shows a full-screen help view with all keyboard shortcuts
-func (m model) renderHelp(width int) string {
-	var b strings.Builder
-
-	title := titleStyle.Render("┌─ Help ─┐")
-	padding := (width - visibleLen(title)) / 2
-	if padding < 0 {
-		padding = 0
-	}
-	header := strings.Repeat(" ", padding) + title
-	if visibleLen(header) < width {
-		header += strings.Repeat(" ", width-visibleLen(header))
-	}
-	b.WriteString(header)
-	b.WriteString("\n\n")
-
-	// Define help sections with their keybindings
-	helpSections := []struct {
-		title string
-		items []struct {
-			key  string
-			desc string
-		}
-	}{
-		{
-			title: "Navigation",
-			items: []struct {
-				key  string
-				desc string
-			}{
-				{"↑ / ↓", "Move cursor up/down"},
-				{"← / →", "Navigate between pages"},
-				{"Tab", "Toggle column selection mode"},
-				{"Enter", "Sort by selected column (in column mode)"},
-			},
-		},
-		{
-			title: "Container Actions",
-			items: []struct {
-				key  string
-				desc string
-			}{
-				{"S", "Start selected container"},
-				{"X", "Stop selected container"},
-				{"R", "Restart selected container"},
-				{"D", "Remove selected container"},
-				{"E", "Open interactive shell (bash/sh)"},
-			},
-		},
-		{
-			title: "View & Information",
-			items: []struct {
-				key  string
-				desc string
-			}{
-				{"L", "View/Toggle container logs"},
-				{"I", "View/Toggle container info"},
-				{"C", "Toggle compose/normal view"},
-			},
-		},
-		{
-			title: "Application",
-			items: []struct {
-				key  string
-				desc string
-			}{
-				{"F2", "Open settings"},
-				{"?", "Show this help"},
-				{"q", "Quit application"},
-				{"Esc", "Back/Cancel"},
-			},
-		},
-	}
-
-	// Render each section, one by one
-	for _, section := range helpSections {
-		// Section title
-		sectionTitle := infoLabelStyle.Render("━━ " + section.title + " ━━━━━━━━━━━━━━━━━━━━━━")
-		b.WriteString(sectionTitle)
-		b.WriteString("\n\n")
-
-		// Section items
-		for _, item := range section.items {
-			keyPart := footerKeyStyle.Render(fmt.Sprintf("  %-12s", item.key))
-			descPart := normalStyle.Render(item.desc)
-			line := keyPart + " " + descPart
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	b.WriteString("\n")
-	instr := "[?] or [Esc] to close  •  Visit https://github.com/shubh-io/dockmate for more info"
-	if visibleLen(instr) < width {
-		instr += strings.Repeat(" ", width-visibleLen(instr))
-	}
-	b.WriteString(infoValueStyle.Render(instr))
-	b.WriteString("\n")
-
-	return b.String()
-}
-
-// padRight pads a string to visible width
 func padRight(s string, width int) string {
 	if visibleLen(s) >= width {
 		return s
@@ -2263,7 +1498,6 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-visibleLen(s))
 }
 
-// render keyboard shortcuts at bottom (mode-aware)
 func (m model) renderFooter(width int) string {
 	var keys []struct {
 		key  string
@@ -2371,13 +1605,6 @@ func max(a, b int) int {
 	return b
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // format duration like HH:MM:SS
 func formatDuration(d time.Duration) string {
 	h := int(d.Hours())
@@ -2388,260 +1615,4 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
-}
-
-// buildFlatList creates a flat list from the tree structure for rendering
-func (m *model) buildFlatList() {
-	m.flatList = []treeRow{}
-
-	// sort projects by name
-	projectNames := []string{}
-	for name := range m.projects {
-		projectNames = append(projectNames, name)
-	}
-	sort.Strings(projectNames)
-
-	// Add compose projects
-	for _, projectName := range projectNames {
-		project := m.projects[projectName]
-		running := 0
-		for _, c := range project.Containers {
-			if strings.ToLower(c.State) == "running" {
-				running++
-			}
-		}
-		total := len(project.Containers)
-
-		// Add project row
-		m.flatList = append(m.flatList, treeRow{
-			isProject:   true,
-			projectName: projectName,
-			running:     running,
-			total:       total,
-			indent:      0,
-		})
-
-		// Add container rows if expanded
-		if m.expandedProjects[projectName] {
-			for i := range project.Containers {
-				m.flatList = append(m.flatList, treeRow{
-					isProject: false,
-					container: &project.Containers[i],
-					indent:    1,
-				})
-			}
-		}
-	}
-
-	// Find standalone containers
-	standaloneContainers := []*docker.Container{}
-	composeContainerIDs := make(map[string]bool)
-
-	for _, project := range m.projects {
-		for _, c := range project.Containers {
-			composeContainerIDs[c.ID] = true
-		}
-	}
-
-	for i := range m.containers {
-		if !composeContainerIDs[m.containers[i].ID] {
-			standaloneContainers = append(standaloneContainers, &m.containers[i])
-		}
-	}
-
-	// Add standalone section if any exist
-	if len(standaloneContainers) > 0 {
-		m.flatList = append(m.flatList, treeRow{
-			isProject:   true,
-			projectName: "Standalone Containers",
-			total:       len(standaloneContainers),
-			indent:      0,
-		})
-
-		if m.expandedProjects["Standalone Containers"] {
-			for _, container := range standaloneContainers {
-				m.flatList = append(m.flatList, treeRow{
-					isProject: false,
-					container: container,
-					indent:    1,
-				})
-			}
-		}
-	}
-}
-
-// moveCursorUpTree moves the cursor to the previous non-project row in flatList
-func (m *model) moveCursorUpTree() {
-	if len(m.flatList) == 0 {
-		m.cursor = 0
-		return
-	}
-	i := m.cursor - 1
-	for i >= 0 && m.flatList[i].isProject {
-		i--
-	}
-	if i >= 0 {
-		m.cursor = i
-	} else {
-		// clamp to first non-project if any
-		for j := 0; j < len(m.flatList); j++ {
-			if !m.flatList[j].isProject {
-				m.cursor = j
-				return
-			}
-		}
-		m.cursor = 0
-	}
-}
-
-// moveCursorDownTree moves the cursor to the next non-project row in flatList
-func (m *model) moveCursorDownTree() {
-	if len(m.flatList) == 0 {
-		m.cursor = 0
-		return
-	}
-	i := m.cursor + 1
-	for i < len(m.flatList) && m.flatList[i].isProject {
-		i++
-	}
-	if i < len(m.flatList) {
-		m.cursor = i
-	} else {
-		// clamp to last non-project if any
-		for j := len(m.flatList) - 1; j >= 0; j-- {
-			if !m.flatList[j].isProject {
-				m.cursor = j
-				return
-			}
-		}
-		m.cursor = len(m.flatList) - 1
-	}
-}
-
-// renderTreeRow renders a single tree row (project header or container)
-func (m model) renderTreeRow(row treeRow, selected bool, idW, nameW, memoryW, cpuW, netIOW, blockIOW, imageW, statusW, portsW, totalWidth int) string {
-	if row.isProject {
-		// Project header row
-		expandIcon := "▼"
-		if !m.expandedProjects[row.projectName] {
-			expandIcon = "▶"
-		}
-
-		projectLabel := fmt.Sprintf(" %s %s [%d/%d running]", expandIcon, row.projectName, row.running, row.total)
-		if visibleLen(projectLabel) < totalWidth {
-			projectLabel += strings.Repeat(" ", totalWidth-visibleLen(projectLabel))
-		}
-
-		// Project row style
-		projectStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
-		return projectStyle.Render(projectLabel)
-	}
-
-	// Container row -- same format as normal view but with tree indent
-	c := row.container
-	if c == nil {
-		return normalStyle.Render(strings.Repeat(" ", totalWidth))
-	}
-
-	name := ""
-	if len(c.Names) > 0 {
-		name = c.Names[0]
-		name = strings.TrimPrefix(name, "/")
-	}
-
-	// Add tree indent
-	indentStr := ""
-	if row.indent > 0 {
-		indentStr = " ├─ "
-	}
-
-	id := c.ID
-	if visibleLen(id) > idW-2 {
-		id = truncateToWidth(id, idW-2)
-	}
-
-	containerName := indentStr + name
-	if visibleLen(containerName) > nameW-2 {
-		containerName = truncateToWidth(containerName, nameW-2)
-	}
-
-	img := c.Image
-	if visibleLen(img) > imageW-2 {
-		img = truncateToWidth(img, imageW-2)
-	}
-
-	status := c.Status
-	if visibleLen(status) > statusW-2 {
-		status = truncateToWidth(status, statusW-2)
-	}
-
-	mem := c.Memory
-	if mem == "" {
-		mem = "─"
-	}
-	if visibleLen(mem) > memoryW-2 {
-		mem = truncateToWidth(mem, memoryW-2)
-	}
-
-	cpu := c.CPU
-	if cpu == "" {
-		cpu = "─"
-	}
-	if visibleLen(cpu) > cpuW-2 {
-		cpu = truncateToWidth(cpu, cpuW-2)
-	}
-
-	netio := c.NetIO
-	if netio == "" {
-		netio = "─"
-	}
-	if visibleLen(netio) > netIOW-2 {
-		netio = truncateToWidth(netio, netIOW-2)
-	}
-
-	blockio := c.BlockIO
-	if blockio == "" {
-		blockio = "─"
-	}
-	if visibleLen(blockio) > blockIOW-2 {
-		blockio = truncateToWidth(blockio, blockIOW-2)
-	}
-
-	ports := c.Ports
-	if ports == "" {
-		ports = "─"
-	}
-	if visibleLen(ports) > portsW-7 {
-		ports = truncateToWidth(ports, portsW-6)
-	}
-
-	rowStr := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
-		idW-1, id,
-		nameW-1, containerName,
-		memoryW-2, mem,
-		cpuW-2, cpu,
-		netIOW-1, netio,
-		blockIOW-1, blockio,
-		imageW-1, img,
-		statusW, status,
-		portsW-2, ports)
-
-	if visibleLen(rowStr) < totalWidth {
-		rowStr += strings.Repeat(" ", totalWidth-visibleLen(rowStr))
-	}
-
-	if selected {
-		return selectedStyle.Render(rowStr)
-	}
-
-	switch strings.ToLower(c.State) {
-	case "running":
-		return runningStyle.Render(rowStr)
-	case "paused":
-		return pausedStyle.Render(rowStr)
-	case "exited", "dead":
-		return stoppedStyle.Render(rowStr)
-	default:
-		return normalStyle.Render(rowStr)
-	}
 }

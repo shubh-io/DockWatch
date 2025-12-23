@@ -8,7 +8,6 @@ import (
 // Keyboard shortcuts
 // ============================================================================
 
-// all the keybindings
 type keyMap struct {
 	Up       key.Binding
 	Down     key.Binding
@@ -28,8 +27,6 @@ type keyMap struct {
 	Help     key.Binding
 }
 
-// global keymap
-// supports vim keys (hjkl) and arrows
 var Keys = keyMap{
 	Up:       key.NewBinding(key.WithKeys("up", "k")),
 	Down:     key.NewBinding(key.WithKeys("down", "j")),

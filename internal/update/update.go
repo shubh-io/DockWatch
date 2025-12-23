@@ -14,13 +14,11 @@ import (
 	"github.com/shubh-io/dockmate/pkg/version"
 )
 
-// commandExists checks if a command is available in PATH
 func commandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
 }
 
-// downloadFile downloads a file from URL and saves it to the given path
 func downloadFile(url, filepath string) error {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -60,9 +58,7 @@ func getShellCommand() (string, bool) {
 
 // Check if dockmate is installed via Homebrew
 func isHomebrewInstall() bool {
-	// First, check if brew exists and whether dockmate is registered under brew
 	if _, err := exec.LookPath("brew"); err == nil {
-		// Prefer explicit tap name; fallback to plain formula name
 		if err := exec.Command("brew", "list", "--versions", "shubh-io/tap/dockmate").Run(); err == nil {
 			return true
 		}
@@ -112,8 +108,6 @@ func isHomebrewInstall() bool {
 	return false
 }
 
-// getLatestReleaseTag fetches the latest release tag name from GitHub for the given repo (owner/repo)
-// This uses a small shell pipeline to keep the implementation compact
 func getLatestReleaseTag(repo string) (string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 
@@ -156,9 +150,6 @@ func normalizeTag(tag string) string {
 	return tag
 }
 
-// compareSemver compares two simple dot-separated semantic versions (major.minor.patch).
-// returns -1 if a<b, 0 if equal, +1 if a>b.
-// non-numeric parts are compared lexically!
 func compareSemver(a, b string) int {
 	a = normalizeTag(a)
 	b = normalizeTag(b)
@@ -172,7 +163,7 @@ func compareSemver(a, b string) int {
 
 	// compare each part
 	n := len(a_splited)
-	// if length of b is greater than a, then we compare by b's length
+
 	if len(b_splited) > n {
 		n = len(b_splited)
 	}
@@ -198,10 +189,10 @@ func compareSemver(a, b string) int {
 			if ai > bi {
 				return 1
 			}
-			// equal numerically, continue
+
 			continue
 		}
-		// fallback to lexical comparison if either segment isn't a plain integer
+
 		if cmp := strings.Compare(a_value, b_value); cmp != 0 {
 			return cmp
 		}
@@ -223,7 +214,6 @@ func UpdateCommand() {
 		return
 	}
 
-	// Ensure we have the current version constant available
 	current := version.Dockmate_Version
 
 	latestTag, err := getLatestReleaseTag(version.Repo)
@@ -251,12 +241,11 @@ func UpdateCommand() {
 		return
 	}
 
-	// define install script URL and local filename
 	installURL := "https://raw.githubusercontent.com/shubh-io/dockmate/main/install.sh"
 	installScript := "install.sh"
 
 	// Try piped install first using `sh` only for portability.
-	// bash directly to prevent failures on systems without bash in PATH.
+
 	if commandExists("sh") {
 		if commandExists("curl") {
 			cmd := exec.Command("sh", "-c", fmt.Sprintf("curl -fsSL %s | sh", installURL))
@@ -281,7 +270,6 @@ func UpdateCommand() {
 		}
 	}
 
-	// Fallback- download script using Go's http client, then run it
 	fmt.Println("Downloading installer...")
 	if err := downloadFile(installURL, installScript); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to download install script: %v\n", err)

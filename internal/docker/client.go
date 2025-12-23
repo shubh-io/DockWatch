@@ -12,8 +12,8 @@ import (
 	"github.com/shubh-io/dockmate/internal/config"
 )
 
-// runtimeBin returns the configured container runtime binary name.
-// Defaults to docker if config cannot be loaded or runtime is unset/auto.
+// runtimeBin returns the configured container runtime binary name (podman or docker).
+
 func runtimeBin() string {
 	cfg, err := config.Load()
 	if err != nil {
@@ -35,16 +35,13 @@ func GetContainerStats(containerID string) (cpu string, mem string, pids string,
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// --no-stream = instant snapshot, not continuous
 	cmd := exec.CommandContext(ctx, runtimeBin(), "stats", "--no-stream", "--format", "{{json .}}", containerID)
 
 	output, err := cmd.Output()
 	if err != nil {
-		// timeout or error, just bail
 		return "", "", "", "", "", err
 	}
 
-	// docker stats returns json like this
 	type statsEntry struct {
 		CPUPerc string `json:"CPUPerc"`
 		MemPerc string `json:"MemPerc"`
@@ -53,7 +50,6 @@ func GetContainerStats(containerID string) (cpu string, mem string, pids string,
 		BlockIO string `json:"BlockIO"`
 	}
 
-	// parse it
 	var s statsEntry
 	if err := json.Unmarshal(output, &s); err != nil {
 		return "", "", "", "", "", err
@@ -62,35 +58,27 @@ func GetContainerStats(containerID string) (cpu string, mem string, pids string,
 	return s.CPUPerc, s.MemPerc, s.PIDs, s.NetIO, s.BlockIO, nil
 }
 
-// GetLogs fetches logs from a container
-// skips empty lines and trims whitespace
 func GetLogs(containerID string) ([]string, error) {
-	// 5 sec timeout
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// run docker logs but only tail the last 100 lines to avoid huge output
-	// using the CLI --tail is more efficient than fetching everything then truncating
-	// saves resources and time
 	cmd := exec.CommandContext(ctx, runtimeBin(), "logs", "--tail", "100", containerID)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
 
-	// read output line by line
 	scanner := bufio.NewScanner(stdout)
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 
-	// grab all non-empty lines
 	var out []string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
-		// skip blanks
 		if line == "" {
 			continue
 		}
@@ -111,8 +99,6 @@ func GetLogs(containerID string) ([]string, error) {
 	return out, nil
 }
 
-// ListContainers gets all containers using docker/podman CLI
-// grabs live stats for running ones
 func ListContainers() ([]Container, error) {
 	// 30 sec timeout since we fetch stats for each running container
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -182,7 +168,6 @@ func ListContainers() ([]Container, error) {
 			out = append(out, container)
 		}
 	} else {
-		// Docker format - newline-delimited JSON
 		type dockerEntry struct {
 			ID     string `json:"ID"`
 			Names  string `json:"Names"`
@@ -203,7 +188,6 @@ func ListContainers() ([]Container, error) {
 				return nil, fmt.Errorf("parsing docker output: %w", err)
 			}
 
-			// Split comma separated names
 			names := []string{}
 			if e.Names != "" {
 				for _, n := range strings.Split(e.Names, ",") {
@@ -211,7 +195,6 @@ func ListContainers() ([]Container, error) {
 				}
 			}
 
-			// Derive state from Status text
 			st := strings.ToLower(strings.TrimSpace(e.Status))
 			state := "unknown"
 			if strings.HasPrefix(st, "up") {
@@ -250,7 +233,6 @@ func ListContainers() ([]Container, error) {
 	if len(runningIDs) > 0 {
 		statsMap, err := GetAllContainerStats(runningIDs)
 		if err == nil {
-			// Apply stats to containers
 			for i := range out {
 				if stats, ok := statsMap[out[i].ID]; ok {
 					out[i].CPU = stats.CPU
@@ -266,22 +248,19 @@ func ListContainers() ([]Container, error) {
 }
 
 // GetAllContainerStats fetches stats for multiple containers in a single docker stats call
-// This is MUCH MUCH MUCH faster than previously calling docker stats separately for each container
+
 func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, error) {
 	if len(containerIDs) == 0 {
 		return nil, nil
 	}
 
-	// 5 sec timeout for batch stats (much faster than individual calls)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	runtime := runtimeBin()
 
-	// Build command with all container IDs instead of one by one like old logic flow which resulted in more loading time
 	args := []string{"stats", "--no-stream", "--format"}
 
-	// Use custom format for podman to match Docker's JSON output structure
 	if runtime == "podman" {
 		args = append(args, `{"ID":"{{.ID}}","CPUPerc":"{{.CPUPerc}}","MemPerc":"{{.MemPerc}}","NetIO":"{{.NetIO}}","BlockIO":"{{.BlockIO}}"}`)
 	} else {
@@ -323,11 +302,9 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 			continue // skip weird lines
 		}
 
-		// Podman returns Short IDs (12 chars) and it expects Long IDs.
 		mapID := s.ID
 		if runtime == "podman" {
 			for _, longID := range containerIDs {
-				// If the requested Long ID starts with the Short ID returned by Podman
 				if strings.HasPrefix(longID, s.ID) {
 					mapID = longID
 					break
@@ -356,10 +333,7 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 	return statsMap, nil
 }
 
-// DoAction runs a docker command on a container
-// works with start, stop, restart, rm, etc
 func DoAction(action, containerID string) error {
-	// 30 sec timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -368,7 +342,7 @@ func DoAction(action, containerID string) error {
 }
 
 // FetchComposeProjects fetches all Docker/Podman Compose projects with their containers
-// Groups containers by compose project and calculates running/total counts
+
 func FetchComposeProjects() (map[string]*ComposeProject, error) {
 	// 30 sec timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -419,19 +393,17 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 		}
 
 		for _, e := range entries {
-			// Extract compose metadata from Podman labels
+
 			projectName := e.Labels["io.podman.compose.project"]
 			serviceName := e.Labels["io.podman.compose.service"]
 			containerNumber := e.Labels["io.podman.compose.container-number"]
 			configFile := e.Labels["io.podman.compose.project.config_files"]
 			workingDir := e.Labels["io.podman.compose.project.working_dir"]
 
-			// Skip if not a compose container
 			if projectName == "" {
 				continue
 			}
 
-			// ports like Docker --
 			ports := ""
 			if len(e.Ports) > 0 {
 				var portStrs []string
@@ -445,7 +417,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 
 			state := strings.ToLower(e.State)
 
-			// container struct
 			container := Container{
 				ID:             e.Id,
 				Names:          e.Names,
@@ -458,12 +429,10 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				ComposeNumber:  containerNumber,
 			}
 
-			// Collect running IDs for stats
 			if state == "running" {
 				runningIDs = append(runningIDs, e.Id)
 			}
 
-			// Get or create project
 			project, exists := projects[projectName]
 			if !exists {
 				project = &ComposeProject{
@@ -475,11 +444,9 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				projects[projectName] = project
 			}
 
-			// Add container to project
 			project.Containers = append(project.Containers, container)
 		}
 	} else {
-		// Docker format
 		type dockerEntry struct {
 			ID        string `json:"ID"`
 			Names     string `json:"Names"`
@@ -493,7 +460,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 
 		scanner := bufio.NewScanner(strings.NewReader(string(output)))
 
-		// Parse each container line
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
@@ -505,20 +471,16 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				continue // Skip malformed entries
 			}
 
-			// Parse labels from comma-separated key=value pairs
 			labels := parseLabels(e.Labels)
 
-			// Extract compose metadata
 			projectName := labels["com.docker.compose.project"]
 			serviceName := labels["com.docker.compose.service"]
 			containerNumber := labels["com.docker.compose.container-number"]
 
-			// Skip if not a compose container
 			if projectName == "" {
 				continue
 			}
 
-			// Split comma separated names
 			names := []string{}
 			if e.Names != "" {
 				for _, n := range strings.Split(e.Names, ",") {
@@ -526,7 +488,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				}
 			}
 
-			// Derive state from Status
 			st := strings.ToLower(strings.TrimSpace(e.Status))
 			state := "unknown"
 			if strings.HasPrefix(st, "up") {
@@ -541,7 +502,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				state = "created"
 			}
 
-			// Build container struct
 			container := Container{
 				ID:             e.ID,
 				Names:          names,
@@ -554,7 +514,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				ComposeNumber:  containerNumber,
 			}
 
-			// Collect running IDs for stats
 			if state == "running" {
 				runningIDs = append(runningIDs, e.ID)
 			}
@@ -581,11 +540,10 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 		}
 	}
 
-	// Fetch stats for running containers
 	if len(runningIDs) > 0 {
 		statsMap, err := GetAllContainerStats(runningIDs)
 		if err == nil {
-			// Apply stats to containers in projects
+
 			for _, project := range projects {
 				for i := range project.Containers {
 					if stats, ok := statsMap[project.Containers[i].ID]; ok {
@@ -621,8 +579,6 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 	return projects, nil
 }
 
-// parseLabels parses Docker's comma-separated label format into a map
-// Format: "key1=value1,key2=value2"
 // Handles edge cases like commas in values and empty strings
 func parseLabels(labelsStr string) map[string]string {
 	labels := make(map[string]string)
@@ -630,7 +586,6 @@ func parseLabels(labelsStr string) map[string]string {
 		return labels
 	}
 
-	// Split by comma, but be careful of escaped commas
 	parts := strings.Split(labelsStr, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -638,7 +593,6 @@ func parseLabels(labelsStr string) map[string]string {
 			continue
 		}
 
-		// Split on first = only
 		idx := strings.Index(part, "=")
 		if idx == -1 {
 			continue
