@@ -121,13 +121,8 @@ func ListContainers() ([]Container, error) {
 	runtime := runtimeBin()
 	var cmd *exec.Cmd
 
-	if runtime == "podman" {
-		// Podman returns a JSON array
-		cmd = exec.CommandContext(ctx, runtime, "ps", "--format", "json", "--all")
-	} else {
-		// Docker returns newline-delimited JSON
-		cmd = exec.CommandContext(ctx, runtime, "ps", "--format", "{{json .}}", "--all")
-	}
+	// Docker returns newline-delimited JSON
+	cmd = exec.CommandContext(ctx, runtime, "ps", "--format", "{{json .}}", "--all")
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -281,11 +276,22 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	runtime := runtimeBin()
+
 	// Build command with all container IDs instead of one by one like old logic flow which resulted in more loading time
-	args := []string{"stats", "--no-stream", "--format", "{{json .}}"}
+	args := []string{"stats", "--no-stream", "--format"}
+
+	// Use custom format for podman to match Docker's JSON output structure
+	if runtime == "podman" {
+		args = append(args, `{"ID":"{{.ID}}","CPUPerc":"{{.CPUPerc}}","MemPerc":"{{.MemPerc}}","NetIO":"{{.NetIO}}","BlockIO":"{{.BlockIO}}"}`)
+	} else {
+		// for docker
+		args = append(args, "{{json .}}")
+	}
+
 	args = append(args, containerIDs...)
 
-	cmd := exec.CommandContext(ctx, runtimeBin(), args...)
+	cmd := exec.CommandContext(ctx, runtime, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -298,7 +304,6 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 	// Read stats JSON lines
 	scanner := bufio.NewScanner(stdout)
 	statsMap := make(map[string]ContainerStats)
-
 	type statsEntry struct {
 		ID      string `json:"ID"`
 		CPUPerc string `json:"CPUPerc"`
@@ -315,13 +320,25 @@ func GetAllContainerStats(containerIDs []string) (map[string]ContainerStats, err
 
 		var s statsEntry
 		if err := json.Unmarshal([]byte(line), &s); err != nil {
-			continue // skip malformed lines
+			continue // skip weird lines
 		}
 
-		statsMap[s.ID] = ContainerStats{
-			CPU:    s.CPUPerc,
-			Memory: s.MemPerc,
-			// PIDs:    s.PIDs,
+		// Podman returns Short IDs (12 chars) and it expects Long IDs.
+		mapID := s.ID
+		if runtime == "podman" {
+			for _, longID := range containerIDs {
+				// If the requested Long ID starts with the Short ID returned by Podman
+				if strings.HasPrefix(longID, s.ID) {
+					mapID = longID
+					break
+				}
+			}
+		}
+
+		statsMap[mapID] = ContainerStats{
+			ID:      mapID,
+			CPU:     s.CPUPerc,
+			Memory:  s.MemPerc,
 			NetIO:   s.NetIO,
 			BlockIO: s.BlockIO,
 		}

@@ -42,6 +42,7 @@ type ComposeInfo struct {
 
 // ContainerStats holds stats for a single container
 type ContainerStats struct {
+	ID     string
 	CPU    string
 	Memory string
 	// PIDs    string
