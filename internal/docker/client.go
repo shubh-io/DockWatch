@@ -121,11 +121,12 @@ func ListContainers() ([]Container, error) {
 	if runtime == "podman" {
 		// Podman format - JSON array
 		type podmanEntry struct {
-			Id     string   `json:"Id"`
-			Names  []string `json:"Names"`
-			Image  string   `json:"Image"`
-			Status string   `json:"Status"`
-			State  string   `json:"State"`
+			Id     string            `json:"Id"`
+			Names  []string          `json:"Names"`
+			Image  string            `json:"Image"`
+			Status string            `json:"Status"`
+			State  string            `json:"State"`
+			Labels map[string]string `json:"Labels"`
 			Ports  []struct {
 				HostPort      int    `json:"host_port"`
 				ContainerPort int    `json:"container_port"`
@@ -134,38 +135,101 @@ func ListContainers() ([]Container, error) {
 		}
 
 		var entries []podmanEntry
-		if err := json.Unmarshal(output, &entries); err != nil {
-			return nil, fmt.Errorf("parsing podman output: %w", err)
-		}
+		if err := json.Unmarshal(output, &entries); err == nil {
 
-		for _, e := range entries {
-			// Format ports like Docker does
-			ports := ""
-			if len(e.Ports) > 0 {
-				var portStrs []string
-				for _, p := range e.Ports {
-					if p.HostPort > 0 {
-						portStrs = append(portStrs, fmt.Sprintf("0.0.0.0:%d->%d/%s", p.HostPort, p.ContainerPort, p.Protocol))
+			for _, e := range entries {
+				// Format ports like Docker does
+				ports := ""
+				if len(e.Ports) > 0 {
+					var portStrs []string
+					for _, p := range e.Ports {
+						if p.HostPort > 0 {
+							portStrs = append(portStrs, fmt.Sprintf("0.0.0.0:%d->%d/%s", p.HostPort, p.ContainerPort, p.Protocol))
+						}
+					}
+					ports = strings.Join(portStrs, ", ")
+				}
+
+				state := strings.ToLower(e.State)
+
+				// check for compose project or quadlet unit
+				projectName := e.Labels["io.podman.compose.project"]
+				if projectName == "" {
+					if unit, ok := e.Labels["PODMAN_SYSTEMD_UNIT"]; ok {
+						projectName = strings.TrimSuffix(unit, ".service")
 					}
 				}
-				ports = strings.Join(portStrs, ", ")
-			}
 
-			state := strings.ToLower(e.State)
-			container := Container{
-				ID:     e.Id,
-				Names:  e.Names,
-				Image:  e.Image,
-				Status: e.Status,
-				State:  state,
-				Ports:  ports,
-			}
+				container := Container{
+					ID:             e.Id,
+					Names:          e.Names,
+					Image:          e.Image,
+					Status:         e.Status,
+					State:          state,
+					Ports:          ports,
+					ComposeProject: projectName,
+				}
 
-			if state == "running" {
-				runningIDs = append(runningIDs, e.Id)
-			}
+				if state == "running" {
+					runningIDs = append(runningIDs, e.Id)
+				}
 
-			out = append(out, container)
+				out = append(out, container)
+			}
+		} else {
+			// Fallback -
+			scanner := bufio.NewScanner(strings.NewReader(string(output)))
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" {
+					continue
+				}
+
+				var e podmanEntry
+				if err := json.Unmarshal([]byte(line), &e); err != nil {
+					continue // skip weird lines
+				}
+
+				ports := ""
+				if len(e.Ports) > 0 {
+					var portStrs []string
+					for _, p := range e.Ports {
+						if p.HostPort > 0 {
+							portStrs = append(portStrs, fmt.Sprintf("0.0.0.0:%d->%d/%s", p.HostPort, p.ContainerPort, p.Protocol))
+						}
+					}
+					ports = strings.Join(portStrs, ", ")
+				}
+
+				state := strings.ToLower(e.State)
+
+				// check for compose project or quadlet unit
+				projectName := e.Labels["io.podman.compose.project"]
+				if projectName == "" {
+					if unit, ok := e.Labels["PODMAN_SYSTEMD_UNIT"]; ok {
+						projectName = strings.TrimSuffix(unit, ".service")
+					}
+				}
+
+				container := Container{
+					ID:             e.Id,
+					Names:          e.Names,
+					Image:          e.Image,
+					Status:         e.Status,
+					State:          state,
+					Ports:          ports,
+					ComposeProject: projectName,
+				}
+
+				if state == "running" {
+					runningIDs = append(runningIDs, e.Id)
+				}
+
+				out = append(out, container)
+			}
+			if err := scanner.Err(); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		type dockerEntry struct {
@@ -395,6 +459,14 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 		for _, e := range entries {
 
 			projectName := e.Labels["io.podman.compose.project"]
+
+			if projectName == "" {
+				if unit, ok := e.Labels["PODMAN_SYSTEMD_UNIT"]; ok {
+					//removing the .service suffix
+					projectName = strings.TrimSuffix(unit, ".service")
+				}
+			}
+
 			serviceName := e.Labels["io.podman.compose.service"]
 			containerNumber := e.Labels["io.podman.compose.container-number"]
 			configFile := e.Labels["io.podman.compose.project.config_files"]
