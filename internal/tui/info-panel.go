@@ -16,14 +16,18 @@ func (m model) renderInfoPanel(width int) string {
 		containerName = m.infoContainer.Names[0]
 	}
 	infoTitle := fmt.Sprintf("Container Info: %s ", containerName)
-	if len(infoTitle) < width {
-		infoTitle += strings.Repeat(" ", width-len(infoTitle))
+	if visibleLen(infoTitle) < width {
+		infoTitle += strings.Repeat(" ", width-visibleLen(infoTitle))
 	}
 	b.WriteString(titleStyle.Render(infoTitle))
 	b.WriteString("\n")
 
 	if m.infoContainer == nil {
-		b.WriteString(normalStyle.Render("  No container selected"))
+		noContainerMsg := "  No container selected"
+		if visibleLen(noContainerMsg) < width {
+			noContainerMsg += strings.Repeat(" ", width-visibleLen(noContainerMsg))
+		}
+		b.WriteString(normalStyle.Render(noContainerMsg))
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -66,35 +70,104 @@ func (m model) renderInfoPanel(width int) string {
 		maxInfoLines = 1
 	}
 
-	// Render info fields
-	for i := 0; i < len(infoFields) && i < maxInfoLines; i++ {
-		field := infoFields[i]
+	// Render info fields with wrapping
+	renderedLines := 0
+	for _, field := range infoFields {
+		if renderedLines >= maxInfoLines {
+			break
+		}
+
 		value := field.value
 		if value == "" {
 			value = "─"
 		}
-		// Truncate value if too long
-		maxValueLen := width - len(field.label) - 6
-		if maxValueLen > 0 && len(value) > maxValueLen {
-			value = value[:maxValueLen-3] + "..."
+
+		labelRendered := infoLabelStyle.Render(field.label)
+		labelPart := fmt.Sprintf("  %s: ", labelRendered)
+
+		valueMaxWidth := width - visibleLen(labelPart)
+
+		if valueMaxWidth <= 0 {
+			if renderedLines < maxInfoLines {
+				line := labelPart
+				if visibleLen(line) < width {
+					line += strings.Repeat(" ", width-visibleLen(line))
+				}
+				b.WriteString(normalStyle.Render(line))
+				b.WriteString("\n")
+				renderedLines++
+			}
+			continue
 		}
-		infoLine := fmt.Sprintf("  %s: %s", infoLabelStyle.Render(field.label), infoValueStyle.Render(value))
-		if visibleLen(infoLine) < width {
-			infoLine += strings.Repeat(" ", width-visibleLen(infoLine))
+
+		valueLines := wrapText(value, valueMaxWidth)
+
+		// First line with label
+		if len(valueLines) > 0 {
+			if renderedLines < maxInfoLines {
+				line := labelPart + infoValueStyle.Render(valueLines[0])
+				if visibleLen(line) < width {
+					line += strings.Repeat(" ", width-visibleLen(line))
+				}
+				b.WriteString(normalStyle.Render(line))
+				b.WriteString("\n")
+				renderedLines++
+			}
+		} else {
+			if renderedLines < maxInfoLines {
+				line := labelPart
+				if visibleLen(line) < width {
+					line += strings.Repeat(" ", width-visibleLen(line))
+				}
+				b.WriteString(normalStyle.Render(line))
+				b.WriteString("\n")
+				renderedLines++
+			}
 		}
-		b.WriteString(normalStyle.Render(infoLine))
-		b.WriteString("\n")
+
+		// Subsequent lines, indented
+		if len(valueLines) > 1 {
+			indent := strings.Repeat(" ", visibleLen(labelPart))
+			for i := 1; i < len(valueLines); i++ {
+				if renderedLines >= maxInfoLines {
+					break
+				}
+				line := indent + infoValueStyle.Render(valueLines[i])
+				if visibleLen(line) < width {
+					line += strings.Repeat(" ", width-visibleLen(line))
+				}
+				b.WriteString(normalStyle.Render(line))
+				b.WriteString("\n")
+				renderedLines++
+			}
+		}
 	}
 
 	// Fill remaining lines with empty space
-	renderedLines := len(infoFields)
-	if renderedLines > maxInfoLines {
-		renderedLines = maxInfoLines
-	}
 	for i := renderedLines; i < maxInfoLines; i++ {
 		b.WriteString(normalStyle.Render(strings.Repeat(" ", width)))
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+// wrapText performs hard wrapping on a string.
+func wrapText(text string, maxWidth int) []string {
+	var lines []string
+	if maxWidth <= 0 || text == "" {
+		lines = append(lines, text)
+		return lines
+	}
+
+	runes := []rune(text)
+	for len(runes) > 0 {
+		width := maxWidth
+		if len(runes) < width {
+			width = len(runes)
+		}
+		lines = append(lines, string(runes[:width]))
+		runes = runes[width:]
+	}
+	return lines
 }

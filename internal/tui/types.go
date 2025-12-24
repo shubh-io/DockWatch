@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/shubh-io/dockmate/internal/docker"
 )
 
@@ -33,6 +34,7 @@ type model struct {
 	columnMode           bool                              // column nav mode (vs row nav)
 	selectedColumn       int                               // selected column (0-8)
 	currentMode          appMode                           // current UI mode
+	helpList             list.Model
 
 	// settings
 	settings         Settings

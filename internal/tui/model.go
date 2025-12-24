@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/shubh-io/dockmate/internal/config"
@@ -40,7 +41,13 @@ func InitialModel() model {
 		cfg.Layout.StatusWidth,
 		cfg.Layout.PortWidth,
 	}
-	// runtime load
+	helpList := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	helpList.Title = "Help"
+	helpList.SetShowHelp(true)
+	helpList.SetShowTitle(false)
+	helpList.SetShowStatusBar(false)
+	helpList.SetShowFilter(false)
+	helpList.SetFilteringEnabled(false)
 
 	return model{
 		loading:              true,
@@ -62,6 +69,7 @@ func InitialModel() model {
 		columnMode:           false,
 		selectedColumn:       7,
 		currentMode:          modeNormal,
+		helpList:             helpList,
 
 		// Load settings from config file
 		settings: Settings{
@@ -224,6 +232,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// terminal resized
 		m.terminalWidth = msg.Width
 		m.terminalHeight = msg.Height
+		m.helpList.SetSize(msg.Width, msg.Height-2)
 		m.updatePagination()
 		return m, nil
 
@@ -361,13 +370,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab":
 			// toggle column/row mode
-			m.columnMode = !m.columnMode
-			if m.columnMode {
-				m.currentMode = modeColumnSelect
-				m.statusMessage = "Column mode: Use ← → to navigate, Enter to sort"
-			} else {
-				m.currentMode = modeNormal
-				m.statusMessage = "Row mode: Use ↑ ↓ and ← → to navigate containers"
+			if m.currentMode == modeComposeView || m.currentMode == modeNormal || m.currentMode == modeLogs || m.currentMode == modeInfo {
+				m.columnMode = !m.columnMode
+				if m.columnMode {
+					m.currentMode = modeColumnSelect
+					m.statusMessage = "Column mode: Use ← → to navigate, Enter to sort"
+				} else {
+					m.currentMode = modeNormal
+					m.statusMessage = "Row mode: Use ↑ ↓ and ← → to navigate containers"
+				}
 			}
 			return m, nil
 
@@ -406,7 +417,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Settings: adjust column % and refresh interval"
 			return m, nil
 
-		case "?":
+		case "f1":
 			// toggle help mode
 			if m.currentMode == modeHelp {
 				m.currentMode = modeNormal
@@ -415,7 +426,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.currentMode = modeHelp
 				m.suspendRefresh = true
+				m.helpList.SetItems(getHelpItems(m))
 				m.statusMessage = "Help: Keyboard shortcuts"
+
 			}
 			return m, nil
 
@@ -513,6 +526,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+		}
+		if m.currentMode == modeHelp {
+			switch msg.String() {
+			case "esc", "f1", "q":
+				m.currentMode = modeNormal
+				m.suspendRefresh = false
+				m.statusMessage = "Help closed"
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.helpList, cmd = m.helpList.Update(msg)
+			return m, cmd
 		}
 
 		if m.currentMode == modeSettings {
@@ -649,293 +674,297 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.currentMode == modeComposeView || m.currentMode == modeNormal || m.currentMode == modeLogs || m.currentMode == modeInfo {
+			// Handle key bindings
+			switch {
+			case key.Matches(msg, Keys.Quit):
+				return m, tea.Quit
 
-		// Handle key bindings
-		switch {
-		case key.Matches(msg, Keys.Quit):
-			return m, tea.Quit
-
-		case key.Matches(msg, Keys.Up):
-			if !m.columnMode {
-				if m.composeViewMode {
-					if len(m.flatList) > 0 {
-						m.moveCursorUpTree()
+			case key.Matches(msg, Keys.Up):
+				if !m.columnMode {
+					if m.composeViewMode {
+						if len(m.flatList) > 0 {
+							m.moveCursorUpTree()
+						}
+					} else {
+						if m.cursor > 0 {
+							m.cursor--
+						}
 					}
-				} else {
-					if m.cursor > 0 {
-						m.cursor--
+					if m.maxContainersPerPage > 0 && m.cursor < m.page*m.maxContainersPerPage {
+						m.page--
+						if m.page < 0 {
+							m.page = 0
+						}
+					}
+					if m.cursor < 0 {
+						m.cursor = 0
 					}
 				}
-				if m.maxContainersPerPage > 0 && m.cursor < m.page*m.maxContainersPerPage {
+
+			case key.Matches(msg, Keys.Down):
+				if !m.columnMode {
+					if m.composeViewMode {
+						if len(m.flatList) > 0 {
+							m.moveCursorDownTree()
+						}
+					} else {
+						maxItems := len(m.containers) - 1
+						if m.cursor < maxItems {
+							m.cursor++
+						}
+					}
+					if m.maxContainersPerPage > 0 && m.cursor >= (m.page+1)*m.maxContainersPerPage {
+						m.page++
+					}
+				}
+
+			case key.Matches(msg, Keys.PageUp):
+				if m.page > 0 {
 					m.page--
-					if m.page < 0 {
-						m.page = 0
-					}
-				}
-				if m.cursor < 0 {
-					m.cursor = 0
-				}
-			}
-
-		case key.Matches(msg, Keys.Down):
-			if !m.columnMode {
-				if m.composeViewMode {
-					if len(m.flatList) > 0 {
-						m.moveCursorDownTree()
-					}
-				} else {
-					maxItems := len(m.containers) - 1
-					if m.cursor < maxItems {
-						m.cursor++
-					}
-				}
-				if m.maxContainersPerPage > 0 && m.cursor >= (m.page+1)*m.maxContainersPerPage {
-					m.page++
-				}
-			}
-
-		case key.Matches(msg, Keys.PageUp):
-			if m.page > 0 {
-				m.page--
-				if m.maxContainersPerPage > 0 {
-					if m.composeViewMode {
-						pageStart := m.page * m.maxContainersPerPage
-						if pageStart < 0 {
-							pageStart = 0
-						}
-						pageEnd := pageStart + m.maxContainersPerPage
-						if pageEnd > len(m.flatList) {
-							pageEnd = len(m.flatList)
-						}
-						found := -1
-						for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
-							if !m.flatList[i].isProject {
-								found = i
-								break
+					if m.maxContainersPerPage > 0 {
+						if m.composeViewMode {
+							pageStart := m.page * m.maxContainersPerPage
+							if pageStart < 0 {
+								pageStart = 0
 							}
-						}
-						if found != -1 {
-							m.cursor = found
-						} else if len(m.flatList) > 0 {
-							for i := pageStart - 1; i >= 0; i-- {
+							pageEnd := pageStart + m.maxContainersPerPage
+							if pageEnd > len(m.flatList) {
+								pageEnd = len(m.flatList)
+							}
+							found := -1
+							for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
 								if !m.flatList[i].isProject {
-									m.cursor = i
+									found = i
 									break
 								}
 							}
-						}
-					} else {
-						m.cursor = m.page * m.maxContainersPerPage
-						if m.cursor >= len(m.containers) {
-							m.cursor = max(0, len(m.containers)-1)
-						}
-					}
-				}
-			}
-			m.updatePagination()
-
-		case key.Matches(msg, Keys.PageDown):
-			// Go to next page (right arrow)
-			maxPage := 0
-			if m.maxContainersPerPage > 0 {
-				count := len(m.containers)
-				if m.composeViewMode {
-					count = len(m.flatList)
-				}
-				maxPage = (count - 1) / m.maxContainersPerPage
-			}
-			if maxPage < 0 {
-				maxPage = 0
-			}
-			if m.page < maxPage {
-				m.page++
-				if m.maxContainersPerPage > 0 {
-					if m.composeViewMode {
-						pageStart := m.page * m.maxContainersPerPage
-						if pageStart < 0 {
-							pageStart = 0
-						}
-						pageEnd := pageStart + m.maxContainersPerPage
-						if pageEnd > len(m.flatList) {
-							pageEnd = len(m.flatList)
-						}
-						found := -1
-						for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
-							if !m.flatList[i].isProject {
-								found = i
-								break
-							}
-						}
-						if found != -1 {
-							m.cursor = found
-						} else if len(m.flatList) > 0 {
-							for i := pageStart; i < len(m.flatList); i++ {
-								if !m.flatList[i].isProject {
-									m.cursor = i
-									break
+							if found != -1 {
+								m.cursor = found
+							} else if len(m.flatList) > 0 {
+								for i := pageStart - 1; i >= 0; i-- {
+									if !m.flatList[i].isProject {
+										m.cursor = i
+										break
+									}
 								}
 							}
-						}
-					} else {
-						m.cursor = m.page * m.maxContainersPerPage
-						if m.cursor >= len(m.containers) {
-							m.cursor = max(0, len(m.containers)-1)
+						} else {
+							m.cursor = m.page * m.maxContainersPerPage
+							if m.cursor >= len(m.containers) {
+								m.cursor = max(0, len(m.containers)-1)
+							}
 						}
 					}
-				}
-			}
-			m.updatePagination()
-
-		case key.Matches(msg, Keys.Refresh):
-			// Manually refresh container list
-			m.loading = true
-			m.logsVisible = false
-			m.infoVisible = false
-			m.infoContainer = nil
-			m.updatePagination()
-			return m, fetchContainers()
-
-		case msg.String() == "c", msg.String() == "C":
-			m.composeViewMode = !m.composeViewMode
-			m.currentMode = modeComposeView
-			if m.composeViewMode {
-				m.statusMessage = "Switched to Compose view "
-				m.expandedProjects = make(map[string]bool)
-				m.expandedProjects["Standalone Containers"] = true
-				m.cursor = 0
-				m.page = 0
-
-				// to save up performance and API calls
-				return m, tea.Batch(fetchComposeProjects(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
-			}
-			// Exiting compose view  - back to normal
-			m.statusMessage = "Switched to Container View"
-			m.cursor = 0
-			m.page = 0
-			m.updatePagination()
-			return m, nil
-
-		case key.Matches(msg, Keys.Start):
-			// Start selected container
-			if m.composeViewMode {
-				// In compose view mode, get container from flatList
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					container := m.flatList[m.cursor].container
-					m.statusMessage = "Starting container..."
-					return m, doAction("start", container.ID)
-				}
-			} else {
-				// Normal mode
-				if len(m.containers) > 0 {
-					m.statusMessage = "Starting container..."
-					return m, doAction("start", m.containers[m.cursor].ID)
-				}
-			}
-
-		case key.Matches(msg, Keys.Stop):
-			// Stop selected container
-			if m.composeViewMode {
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					container := m.flatList[m.cursor].container
-					m.statusMessage = "Stopping container..."
-					return m, doAction("stop", container.ID)
-				}
-			} else {
-				// Normal mode
-				if len(m.containers) > 0 {
-					m.statusMessage = "Stopping container..."
-					return m, doAction("stop", m.containers[m.cursor].ID)
-				}
-			}
-
-		case key.Matches(msg, Keys.Info):
-			// Toggle info panel for selected container
-			var selected *docker.Container
-			if m.logsVisible {
-				return m, nil
-			}
-			if m.composeViewMode {
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					selected = m.flatList[m.cursor].container
-				}
-			} else {
-				if len(m.containers) > 0 {
-					selected = &m.containers[m.cursor]
-				}
-			}
-			if selected != nil {
-				// toggle visibility; when opening set infoContainer pointer, when closing clear it
-				m.infoVisible = !m.infoVisible
-				if m.infoVisible {
-					m.infoContainer = selected
-					m.currentMode = modeInfo
-					m.statusMessage = "Showing container info"
-				} else {
-					m.infoContainer = nil
-					m.currentMode = modeNormal
-					m.statusMessage = "Info panel closed"
 				}
 				m.updatePagination()
-			}
 
-		case key.Matches(msg, Keys.Exec):
-			// Open interactive shell in selected container (only if running)
-			var container *docker.Container
-			if m.composeViewMode {
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					container = m.flatList[m.cursor].container
-				}
-			} else {
-				if len(m.containers) > 0 {
-					container = &m.containers[m.cursor]
-				}
-			}
-			if container != nil && container.State == "running" {
-				containerID := container.ID
-				m.statusMessage = "Opening interactive shell..."
-				// Falls back to /bin/sh if configured shell is not available in container
-				shell := m.settings.Shell
-				shellCmd := fmt.Sprintf("if [ -x %s ]; then exec %s; else exec /bin/sh; fi", shell, shell)
-				cmdStr := fmt.Sprintf("echo '# you are in interactive shell'; exec %s exec -it %s sh -c '%s'", string(m.settings.Runtime), containerID, shellCmd)
-				c := exec.Command("bash", "-lc", cmdStr)
-				return m, tea.ExecProcess(c, func(err error) tea.Msg {
-					if err != nil {
-						return actionDoneMsg{err: fmt.Errorf("shell error: %v", err)}
+			case key.Matches(msg, Keys.PageDown):
+				// Go to next page (right arrow)
+				maxPage := 0
+				if m.maxContainersPerPage > 0 {
+					count := len(m.containers)
+					if m.composeViewMode {
+						count = len(m.flatList)
 					}
-					return actionDoneMsg{err: nil}
-				})
-			}
-
-		case key.Matches(msg, Keys.Restart):
-			// Restart selected container
-			if m.composeViewMode {
-
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					container := m.flatList[m.cursor].container
-					m.statusMessage = "Restarting container..."
-					return m, doAction("restart", container.ID)
+					maxPage = (count - 1) / m.maxContainersPerPage
 				}
-			} else {
-				// Normal mode
-				if len(m.containers) > 0 {
-					m.statusMessage = "Restarting container..."
-					return m, doAction("restart", m.containers[m.cursor].ID)
+				if maxPage < 0 {
+					maxPage = 0
 				}
-			}
+				if m.page < maxPage {
+					m.page++
+					if m.maxContainersPerPage > 0 {
+						if m.composeViewMode {
+							pageStart := m.page * m.maxContainersPerPage
+							if pageStart < 0 {
+								pageStart = 0
+							}
+							pageEnd := pageStart + m.maxContainersPerPage
+							if pageEnd > len(m.flatList) {
+								pageEnd = len(m.flatList)
+							}
+							found := -1
+							for i := pageStart; i < pageEnd && i < len(m.flatList); i++ {
+								if !m.flatList[i].isProject {
+									found = i
+									break
+								}
+							}
+							if found != -1 {
+								m.cursor = found
+							} else if len(m.flatList) > 0 {
+								for i := pageStart; i < len(m.flatList); i++ {
+									if !m.flatList[i].isProject {
+										m.cursor = i
+										break
+									}
+								}
+							}
+						} else {
+							m.cursor = m.page * m.maxContainersPerPage
+							if m.cursor >= len(m.containers) {
+								m.cursor = max(0, len(m.containers)-1)
+							}
+						}
+					}
+				}
+				m.updatePagination()
 
-		case key.Matches(msg, Keys.Remove):
-			// Remove selected container
-			if m.composeViewMode {
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					container := m.flatList[m.cursor].container
-					m.statusMessage = "Removing container..."
-					return m, doAction("rm", container.ID)
+			case key.Matches(msg, Keys.Refresh):
+				// Manually refresh container list
+				m.loading = true
+				m.logsVisible = false
+				m.infoVisible = false
+				m.infoContainer = nil
+				m.updatePagination()
+				return m, fetchContainers()
+
+			case msg.String() == "c", msg.String() == "C":
+				m.composeViewMode = !m.composeViewMode
+				m.currentMode = modeComposeView
+				if m.composeViewMode {
+					m.statusMessage = "Switched to Compose view "
+					m.expandedProjects = make(map[string]bool)
+					m.expandedProjects["Standalone Containers"] = true
+					m.cursor = 0
+					m.page = 0
+
+					// to save up performance and API calls
+					return m, tea.Batch(fetchComposeProjects(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second))
 				}
-			} else {
-				// Normal mode
-				if len(m.containers) > 0 {
-					m.statusMessage = "Removing container..."
-					return m, doAction("rm", m.containers[m.cursor].ID)
+				// Exiting compose view  - back to normal
+				m.statusMessage = "Switched to Container View"
+				m.cursor = 0
+				m.page = 0
+				m.updatePagination()
+				return m, nil
+
+			case key.Matches(msg, Keys.Start):
+				// Start selected container
+				if m.composeViewMode {
+					// In compose view mode, get container from flatList
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						container := m.flatList[m.cursor].container
+						m.statusMessage = "Starting container..."
+						return m, doAction("start", container.ID)
+					}
+				} else {
+					// Normal mode
+					if len(m.containers) > 0 {
+						m.statusMessage = "Starting container..."
+						return m, doAction("start", m.containers[m.cursor].ID)
+					}
+				}
+
+			case key.Matches(msg, Keys.Stop):
+				// Stop selected container
+				if m.composeViewMode {
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						container := m.flatList[m.cursor].container
+						m.statusMessage = "Stopping container..."
+						return m, doAction("stop", container.ID)
+					}
+				} else {
+					// Normal mode
+					if len(m.containers) > 0 {
+						m.statusMessage = "Stopping container..."
+						return m, doAction("stop", m.containers[m.cursor].ID)
+					}
+				}
+
+			case key.Matches(msg, Keys.Info):
+				// Toggle info panel for selected container
+				var selected *docker.Container
+				if m.logsVisible {
+					return m, nil
+				}
+				if m.composeViewMode {
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						selected = m.flatList[m.cursor].container
+					}
+				} else {
+					if len(m.containers) > 0 {
+						selected = &m.containers[m.cursor]
+					}
+				}
+				if selected != nil {
+					// toggle visibility; when opening set infoContainer pointer, when closing clear it
+					m.infoVisible = !m.infoVisible
+					if m.infoVisible {
+						m.infoContainer = selected
+						m.currentMode = modeInfo
+						m.statusMessage = "Showing container info"
+					} else {
+						m.infoContainer = nil
+						m.currentMode = modeNormal
+						m.statusMessage = "Info panel closed"
+					}
+					m.updatePagination()
+				}
+
+			case key.Matches(msg, Keys.Exec):
+				// Open interactive shell in selected container (only if running)
+				var container *docker.Container
+				if m.composeViewMode {
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						container = m.flatList[m.cursor].container
+					}
+				} else {
+					if len(m.containers) > 0 {
+						container = &m.containers[m.cursor]
+					}
+				}
+				if container != nil && container.State == "running" {
+					containerID := container.ID
+					m.statusMessage = "Opening interactive shell..."
+					// Falls back to /bin/sh if configured shell is not available in container
+					shell := m.settings.Shell
+					shellCmd := fmt.Sprintf(
+						"echo '--- You are now in the interactive shell of %s ---'; "+
+							"if [ -x '%s' ]; then exec '%s'; else exec /bin/sh; fi",
+						containerID, shell, shell,
+					)
+					c := exec.Command(string(m.settings.Runtime), "exec", "-it", containerID, "sh", "-c", shellCmd)
+					return m, tea.ExecProcess(c, func(err error) tea.Msg {
+						if err != nil {
+							return actionDoneMsg{err: fmt.Errorf("shell error: %v", err)}
+						}
+						return actionDoneMsg{err: nil}
+					})
+				}
+
+			case key.Matches(msg, Keys.Restart):
+				// Restart selected container
+				if m.composeViewMode {
+
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						container := m.flatList[m.cursor].container
+						m.statusMessage = "Restarting container..."
+						return m, doAction("restart", container.ID)
+					}
+				} else {
+					// Normal mode
+					if len(m.containers) > 0 {
+						m.statusMessage = "Restarting container..."
+						return m, doAction("restart", m.containers[m.cursor].ID)
+					}
+				}
+
+			case key.Matches(msg, Keys.Remove):
+				// Remove selected container
+				if m.composeViewMode {
+					if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
+						container := m.flatList[m.cursor].container
+						m.statusMessage = "Removing container..."
+						return m, doAction("rm", container.ID)
+					}
+				} else {
+					// Normal mode
+					if len(m.containers) > 0 {
+						m.statusMessage = "Removing container..."
+						return m, doAction("rm", m.containers[m.cursor].ID)
+					}
 				}
 			}
 		}
@@ -1555,7 +1584,7 @@ func (m model) renderFooter(width int) string {
 			key  string
 			desc string
 		}{
-			{"?", "Close Help"},
+			{"f1", "Close Help"},
 			{"Esc", "Back"},
 		}
 	default: // modeNormal
@@ -1567,7 +1596,7 @@ func (m model) renderFooter(width int) string {
 			{"←→", "Nav pages"},
 			{"Tab", "Col Mode"},
 			{"c", "Compose View"},
-			{"?", "Keyboard shortcuts"},
+			{"f1", "Keyboard shortcuts"},
 			{"f2", "Settings"},
 			{"q", "Quit"},
 		}
@@ -1581,7 +1610,7 @@ func (m model) renderFooter(width int) string {
 				{"Tab", "Col Mode"},
 
 				{"c", "Normal View"},
-				{"?", "Keyboard shortcuts"},
+				{"f1", "Keyboard shortcuts"},
 				{"f2", "Settings"},
 				{"q", "Quit"},
 			}
