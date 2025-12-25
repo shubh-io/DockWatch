@@ -41,6 +41,17 @@ func InitialModel() model {
 		cfg.Layout.StatusWidth,
 		cfg.Layout.PortWidth,
 	}
+	VisibleColumns := []bool{
+		cfg.Layout.ContainerIdVisible,
+		cfg.Layout.ContainerNameVisible,
+		cfg.Layout.MemoryVisible,
+		cfg.Layout.CPUVisible,
+		cfg.Layout.NetIOVisible,
+		cfg.Layout.DiskIOVisible,
+		cfg.Layout.ImageVisible,
+		cfg.Layout.StatusVisible,
+		cfg.Layout.PortVisible,
+	}
 	helpList := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	helpList.Title = "Help"
 	helpList.SetShowHelp(true)
@@ -77,6 +88,7 @@ func InitialModel() model {
 			RefreshInterval: cfg.Performance.PollRate,
 			Runtime:         ContainerRuntime(cfg.Runtime.Type),
 			Shell:           cfg.Exec.Shell,
+			VisibleColumns:  VisibleColumns,
 		},
 		suspendRefresh:   false,
 		settingsSelected: 0,
@@ -333,6 +345,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// keyboard input
 		m.statusMessage = ""
+		if msg.String() == "ctrl+c" || msg.String() == "q" {
+			if !(m.currentMode == modeHelp) {
+				return m, tea.Quit
+
+			}
+		}
 
 		if msg.String() == "esc" {
 			if m.columnMode {
@@ -367,12 +385,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 			m.statusMessage = "Dumped debug snapshot"
 			return m, nil
+		case " ":
+			// toggle visibility for column when selected
+			if m.settings.VisibleColumns == nil || len(m.settings.VisibleColumns) != 9 {
+				m.settings.VisibleColumns = []bool{true, true, true, true, true, true, true, true, true}
+			}
+			if m.settingsSelected >= 0 && m.settingsSelected <= 8 {
+				m.settings.VisibleColumns[m.settingsSelected] = !m.settings.VisibleColumns[m.settingsSelected]
+			}
+			return m, nil
 
 		case "tab":
 			// toggle column/row mode
 			if m.currentMode == modeComposeView || m.currentMode == modeNormal || m.currentMode == modeLogs || m.currentMode == modeInfo {
 				m.columnMode = !m.columnMode
 				if m.columnMode {
+					// ensure selectedColumn maps to a valid visual index
+					colmVisCount := countVisibleColumns(m.settings.VisibleColumns)
+					if colmVisCount <= 0 {
+						colmVisCount = 1
+					}
+					if m.selectedColumn >= colmVisCount {
+						m.selectedColumn = colmVisCount - 1
+					}
 					m.currentMode = modeColumnSelect
 					m.statusMessage = "Column mode: Use ← → to navigate, Enter to sort"
 				} else {
@@ -468,25 +503,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.columnMode {
 				var col sortColumn
 				var canSort bool = true
-				switch m.selectedColumn {
-				case 0:
-					col = sortByID
-				case 1:
-					col = sortByName
-				case 2:
-					col = sortByMemory
-				case 3:
-					col = sortByCPU
-				case 4:
-					col = sortByNetIO
-				case 5:
-					col = sortByBlockIO
-				case 6:
-					col = sortByImage
-				case 7:
-					col = sortByStatus
-				case 8:
-					col = sortByPorts
+
+				type ColumnDef struct {
+					Name     string
+					SortFunc sortColumn
+					ID       int
+				}
+
+				var masterColumns = []ColumnDef{
+					{"ID", sortByID, 0},
+					{"Name", sortByName, 1},
+					{"Memory", sortByMemory, 2},
+					{"CPU", sortByCPU, 3},
+					{"Net I/O", sortByNetIO, 4},
+					{"Disk I/O", sortByBlockIO, 5},
+					{"Image", sortByImage, 6},
+					{"Status", sortByStatus, 7},
+					{"Ports", sortByPorts, 8},
+				}
+
+				var activeCols []ColumnDef
+				for _, colDef := range masterColumns {
+					if m.settings.VisibleColumns[colDef.ID] {
+						activeCols = append(activeCols, colDef)
+					}
+				}
+
+				// m.selectedColumn matches the VISUAL order of TUI
+				if m.selectedColumn >= 0 && m.selectedColumn < len(activeCols) {
+					col = activeCols[m.selectedColumn].SortFunc
+					canSort = true
+				} else {
+					canSort = false
 				}
 
 				if canSort {
@@ -503,8 +551,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !m.sortAsc {
 						dir = "desc"
 					}
-					colNames := []string{"ID", "Name", "Memory", "CPU", "NET I/O", "Disk I/O", "Image", "Status", "PORTS"}
-					m.statusMessage = fmt.Sprintf("Sorted by %s (%s)", colNames[m.selectedColumn], dir)
+
+					if m.selectedColumn >= 0 && m.selectedColumn < len(activeCols) {
+						m.statusMessage = fmt.Sprintf("Sorted by %s (%s)", activeCols[m.selectedColumn].Name, dir)
+					} else {
+						m.statusMessage = fmt.Sprintf("Sorted (%s)", dir)
+					}
 				}
 			}
 			return m, nil
@@ -512,6 +564,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "left", "h":
 
 			if m.columnMode {
+				colmVisCount := countVisibleColumns(m.settings.VisibleColumns)
+				if colmVisCount <= 0 {
+					return m, nil
+				}
+				if m.selectedColumn >= colmVisCount {
+					m.selectedColumn = colmVisCount - 1
+				}
 				if m.selectedColumn > 0 {
 					m.selectedColumn--
 				}
@@ -521,7 +580,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "right":
 
 			if m.columnMode {
-				if m.selectedColumn < 8 {
+				colmVisCount := countVisibleColumns(m.settings.VisibleColumns)
+				if colmVisCount <= 0 {
+					return m, nil
+				}
+				if m.selectedColumn < colmVisCount-1 {
 					m.selectedColumn++
 				}
 				return m, nil
@@ -616,6 +679,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						ImageWidth:         m.settings.ColumnPercents[6],
 						StatusWidth:        m.settings.ColumnPercents[7],
 						PortWidth:          m.settings.ColumnPercents[8],
+
+						ContainerIdVisible:   m.settings.VisibleColumns[0],
+						ContainerNameVisible: m.settings.VisibleColumns[1],
+						MemoryVisible:        m.settings.VisibleColumns[2],
+						CPUVisible:           m.settings.VisibleColumns[3],
+						NetIOVisible:         m.settings.VisibleColumns[4],
+						DiskIOVisible:        m.settings.VisibleColumns[5],
+						ImageVisible:         m.settings.VisibleColumns[6],
+						StatusVisible:        m.settings.VisibleColumns[7],
+						PortVisible:          m.settings.VisibleColumns[8],
 					},
 					Performance: config.PerformanceConfig{
 						PollRate: m.settings.RefreshInterval,
@@ -1029,11 +1102,37 @@ func (m model) View() string {
 		percents = []int{8, 14, 6, 6, 10, 12, 11, 13, 15}
 	}
 
+	// visible columns
+	visible := m.settings.VisibleColumns
+	if visible == nil || len(visible) != 9 {
+		visible = []bool{true, true, true, true, true, true, true, true, true}
+		m.settings.VisibleColumns = visible
+	}
+
 	// allocate widths by percent, respecting minimums
 	widths := make([]int, len(mins))
 	allocated := 0
+	sumPerc := 0
+	for i := range percents {
+		if visible[i] {
+			sumPerc += percents[i]
+		}
+	}
+	if sumPerc == 0 {
+
+		sumPerc = 100
+		for i := range percents {
+			visible[i] = true
+		}
+		m.settings.VisibleColumns = visible
+	}
+
 	for i := range mins {
-		desired := (usableWidth * percents[i]) / 100
+		if !visible[i] {
+			widths[i] = 0
+			continue
+		}
+		desired := (usableWidth * percents[i]) / sumPerc
 		widths[i] = max(mins[i], desired)
 		allocated += widths[i]
 	}
@@ -1045,6 +1144,9 @@ func (m model) View() string {
 			for i := range widths {
 				if remaining == 0 {
 					break
+				}
+				if !visible[i] {
+					continue
 				}
 				widths[i]++
 				remaining--
@@ -1075,7 +1177,7 @@ func (m model) View() string {
 	highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("#58cdffff")).Foreground(lipgloss.Color("#000000")).Bold(true)
 
 	// buildColumn builds a complete cell with spacing, padding, and title
-	buildColumn := func(colIdx int, title string, width int, indicator string) string {
+	buildColumn := func(columnIndex int, title string, width int, indicator string) string {
 		text := title + indicator
 
 		paddingNeeded := width - visibleLen(text)
@@ -1084,47 +1186,49 @@ func (m model) View() string {
 		}
 		// Add leading space and apply style
 		cell := " " + text
-		if m.columnMode && m.selectedColumn == colIdx {
+		if m.columnMode && m.selectedColumn == columnIndex {
 			return highlightStyle.Render(cell)
 		}
 		return headerStyle.Render(cell)
 	}
 
-	// build all 9 columns
-	col0 := buildColumn(0, "CONTAINER ID", idW-1, sortIndicator(sortByID))
-	col1 := buildColumn(1, "NAME", nameW-1, sortIndicator(sortByName))
-	col2 := buildColumn(2, "MEMORY", memoryW-2, sortIndicator(sortByMemory))
-	col3 := buildColumn(3, "CPU", cpuW-2, sortIndicator(sortByCPU))
-	col4 := buildColumn(4, "NET I/O", netIOW-1, sortIndicator(sortByNetIO))
-	col5 := buildColumn(5, "DISK I/O", blockIOW-1, sortIndicator(sortByBlockIO))
-	col6 := buildColumn(6, "IMAGE", imageW-1, sortIndicator(sortByImage))
-	col7 := buildColumn(7, "STATUS", statusW, sortIndicator(sortByStatus))
-	col8 := buildColumn(8, "PORTS", portsW, sortIndicator(sortByPorts))
-
-	// combine into header - separators only
+	// build header for visible columns only
 	sepStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#000000")).
 		Background(meterGreen)
 	sep := sepStyle.Render("│")
 
 	var hdrBuilder strings.Builder
-	hdrBuilder.WriteString(col0)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col1)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col2)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col3)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col4)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col5)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col6)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col7)
-	hdrBuilder.WriteString(sep)
-	hdrBuilder.WriteString(col8)
+	colTitles := []struct {
+		idx   int
+		title string
+		ind   sortColumn
+		pad   int
+	}{
+		{0, "CONTAINER ID", sortByID, idW - 1},
+		{1, "NAME", sortByName, nameW - 1},
+		{2, "MEMORY", sortByMemory, memoryW - 2},
+		{3, "CPU", sortByCPU, cpuW - 2},
+		{4, "NET I/O", sortByNetIO, netIOW - 1},
+		{5, "DISK I/O", sortByBlockIO, blockIOW - 1},
+		{6, "IMAGE", sortByImage, imageW - 1},
+		{7, "STATUS", sortByStatus, statusW},
+		{8, "PORTS", sortByPorts, portsW - 2},
+	}
+
+	first := true
+	columnIndex := 0
+	for _, col := range colTitles {
+		if !visible[col.idx] {
+			continue
+		}
+		if !first {
+			hdrBuilder.WriteString(sep)
+		}
+		first = false
+		hdrBuilder.WriteString(buildColumn(columnIndex, col.title, col.pad, sortIndicator(col.ind)))
+		columnIndex++
+	}
 
 	hdr := hdrBuilder.String()
 	// pad header to fill width
@@ -1403,7 +1507,7 @@ func truncateToWidth(s string, width int) string {
 		return "…"
 	}
 
-	visCount := 0
+	colmVisCount := 0
 	inEscape := false
 	result := ""
 
@@ -1417,15 +1521,28 @@ func truncateToWidth(s string, width int) string {
 				inEscape = false
 			}
 		} else {
-			if visCount >= targetWidth {
+			if colmVisCount >= targetWidth {
 				break
 			}
 			result += string(r)
-			visCount++
+			colmVisCount++
 		}
 	}
 
 	return result + "…"
+}
+
+func countVisibleColumns(visible []bool) int {
+	if visible == nil || len(visible) != 9 {
+		return 9
+	}
+	count := 0
+	for _, vis := range visible {
+		if vis {
+			count++
+		}
+	}
+	return count
 }
 
 // render one container row
@@ -1501,17 +1618,29 @@ func (m model) renderContainerRow(c docker.Container, selected bool, idW, nameW,
 		ports = truncateToWidth(ports, portsW-6)
 	}
 
-	// Format row (STATE column omitted)
-	row := fmt.Sprintf(" %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s│ %-*s",
-		idW-1, id,
-		nameW-1, name,
-		memoryW-2, mem,
-		cpuW-2, cpu,
-		netIOW-1, netio,
-		blockIOW-1, blockio,
-		imageW-1, img,
-		statusW, status,
-		portsW-2, ports)
+	// build colm for visible columns only
+	visible := m.settings.VisibleColumns
+	if visible == nil || len(visible) != 9 {
+		visible = []bool{true, true, true, true, true, true, true, true, true}
+	}
+
+	padWidths := []int{idW - 1, nameW - 1, memoryW - 2, cpuW - 2, netIOW - 1, blockIOW - 1, imageW - 1, statusW, portsW - 2}
+	values := []string{id, name, mem, cpu, netio, blockio, img, status, ports}
+
+	parts := make([]string, 0, 9)
+	for i := 0; i < 9; i++ {
+		if !visible[i] || padWidths[i] <= 0 {
+			continue
+		}
+		// ensure value fits
+		if visibleLen(values[i]) > padWidths[i] {
+			values[i] = truncateToWidth(values[i], padWidths[i])
+		}
+		part := fmt.Sprintf(" %-*s", padWidths[i], values[i])
+		parts = append(parts, part)
+	}
+
+	row := strings.Join(parts, "│")
 
 	// Pad row to totalWidth BEFORE styling to ensure color extends to edge
 	if visibleLen(row) < totalWidth {

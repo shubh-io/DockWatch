@@ -28,7 +28,15 @@ func (m model) renderSettings(width int) string {
 
 	for i, name := range colNames {
 		pct := m.settings.ColumnPercents[i]
-		line := fmt.Sprintf(" %2d%%  %s", pct, name)
+		visible := true
+		if m.settings.VisibleColumns != nil && len(m.settings.VisibleColumns) == len(colNames) {
+			visible = m.settings.VisibleColumns[i]
+		}
+		checkMark := "[x]"
+		if !visible {
+			checkMark = "[ ]"
+		}
+		line := fmt.Sprintf(" %2d%%  %s  %s", pct, name, checkMark)
 		if m.settingsSelected == i {
 			// highlight selected
 			b.WriteString(selectedStyle.Render(padRight(line, width)))
@@ -71,7 +79,7 @@ func (m model) renderSettings(width int) string {
 	b.WriteString(normalStyle.Render("Shell used for container exec (fallback: /bin/sh)"))
 
 	b.WriteString("\n")
-	instr := "[←/→] or [+/-] adjust  •  [↑/↓] navigate • [s] save  •   [Esc] cancel"
+	instr := "[←/→] or [+/-] adjust  •  [space] toggle  •  [↑/↓] navigate • [s] save  •   [Esc] cancel"
 	if visibleLen(instr) < width {
 		instr += strings.Repeat(" ", width-visibleLen(instr))
 	}

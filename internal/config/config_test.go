@@ -97,6 +97,16 @@ func TestSaveAndLoad(t *testing.T) {
 			ImageWidth:         19,
 			StatusWidth:        14,
 			PortWidth:          14,
+
+			ContainerIdVisible:   true,
+			ContainerNameVisible: true,
+			MemoryVisible:        true,
+			CPUVisible:           true,
+			NetIOVisible:         true,
+			DiskIOVisible:        true,
+			ImageVisible:         true,
+			StatusVisible:        true,
+			PortVisible:          true,
 		},
 		Performance: PerformanceConfig{
 			PollRate: 4,

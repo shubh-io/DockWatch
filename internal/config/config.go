@@ -26,6 +26,16 @@ type LayoutConfig struct {
 	ImageWidth         int `yaml:"image_width"`
 	StatusWidth        int `yaml:"status_width"`
 	PortWidth          int `yaml:"port_width"`
+
+	ContainerIdVisible   bool `yaml:"container_id_visible"`
+	ContainerNameVisible bool `yaml:"container_name_visible"`
+	MemoryVisible        bool `yaml:"memory_visible"`
+	CPUVisible           bool `yaml:"cpu_visible"`
+	NetIOVisible         bool `yaml:"net_io_visible"`
+	DiskIOVisible        bool `yaml:"disk_io_visible"`
+	ImageVisible         bool `yaml:"image_visible"`
+	StatusVisible        bool `yaml:"status_visible"`
+	PortVisible          bool `yaml:"port_visible"`
 }
 
 type PerformanceConfig struct {
@@ -63,6 +73,16 @@ func DefaultConfig() *Config {
 			ImageWidth:         18,
 			StatusWidth:        13,
 			PortWidth:          13,
+
+			ContainerIdVisible:   true,
+			ContainerNameVisible: true,
+			MemoryVisible:        true,
+			CPUVisible:           true,
+			NetIOVisible:         false,
+			DiskIOVisible:        false,
+			ImageVisible:         true,
+			StatusVisible:        true,
+			PortVisible:          true,
 		},
 		Performance: PerformanceConfig{
 			PollRate: 2,

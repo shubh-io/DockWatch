@@ -70,6 +70,7 @@ type Settings struct {
 	RefreshInterval int
 	Runtime         ContainerRuntime
 	Shell           string
+	VisibleColumns  []bool
 }
 
 // which column to sort by
