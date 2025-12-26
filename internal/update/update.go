@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"strconv"
 	"strings"
@@ -281,7 +282,6 @@ func UpdateCommand() {
 	runCmd := exec.Command("sh", installScript)
 	runCmd.Stdout = os.Stdout
 	runCmd.Stderr = os.Stderr
-
 	if err := runCmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
 		fmt.Printf("\nPlease update manually: https://github.com/%s/releases/latest\n", version.Repo)
@@ -295,6 +295,52 @@ func UpdateCommand() {
 		fmt.Printf("Warning: could not remove %s: %v\n", installScript, err)
 	}
 
-	fmt.Println("")
-	fmt.Println("Updated successfully!")
+	// Verify the installed binary actually updated. When the running executable
+	if ok := verifyUpdated(latestTag); ok {
+		fmt.Println("")
+		fmt.Println("Updated successfully!")
+		return
+	}
+
+	// Not updated
+	fmt.Fprintf(os.Stderr, "Update finished but the installed binary did not change.\n")
+	fmt.Println()
+	fmt.Println("You can try the installer directly:")
+	fmt.Printf("  curl -fsSL %s | sh\n", installURL)
+	fmt.Printf("  wget -qO- %s | sh\n", installURL)
+	fmt.Println()
+	fmt.Printf("Or update manually: https://github.com/%s/releases/latest\n", version.Repo)
+	return
+}
+
+// verifyUpdated checks whether the installed `dockmate` reports the expected
+
+func verifyUpdated(latestTag string) bool {
+	latest := normalizeTag(latestTag)
+
+	// Try to run `dockmate version` from PATH to see the installed version
+	cmd := exec.Command("dockmate", "version")
+	out, err := cmd.Output()
+	if err == nil {
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, latestTag) || strings.Contains(outStr, latest) {
+			return true
+		}
+	}
+
+	// If version is unchanged, look for the .new fallback file
+	exePath, err := exec.LookPath("dockmate")
+	if err == nil {
+		dir := filepath.Dir(exePath)
+		newPath := filepath.Join(dir, "dockmate.new")
+		if _, statErr := os.Stat(newPath); statErr == nil {
+			fmt.Fprintf(os.Stderr, "Installer saved the updated binary as: %s\n", newPath)
+			fmt.Fprintf(os.Stderr, "To complete the update: sudo mv %s %s && sudo chmod 755 %s\n", newPath, exePath, exePath)
+			fmt.Fprintln(os.Stderr, "Or reboot the machine to allow overwrite of the running executable.")
+			return false
+		}
+	}
+
+	// No evidence of update
+	return false
 }

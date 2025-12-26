@@ -450,5 +450,20 @@ fi
 echo "If the command isn't found immediately, refresh your shell:"
 echo "  hash -r"
 echo ""
+if [ -n "$EXISTING_PATH" ]; then
+    echo "If you previously ran 'dockmate update' and the update reported success but the binary did not change, please re-run the installer directly to force replace the executable:"
+    echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh"
+    echo "or"
+    echo "  wget -qO- https://raw.githubusercontent.com/$REPO/main/install.sh | sh"
+    echo ""
+    # If the user installed to a custom directory, show how to pass INSTALL_DIR
+    if [ "$INSTALL_DIR" != "/usr/local/bin" ]; then
+        echo "If you installed to a custom directory ($INSTALL_DIR), re-run the installer with INSTALL_DIR set to preserve that location:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | INSTALL_DIR=\"$INSTALL_DIR\" sh"
+        echo "  wget -qO- https://raw.githubusercontent.com/$REPO/main/install.sh | INSTALL_DIR=\"$INSTALL_DIR\" sh"
+        echo ""
+    fi
+fi
+
 echo "Thank you for using dockmate! 🐳"
 echo "====================================================================="
