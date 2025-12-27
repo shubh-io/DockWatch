@@ -484,10 +484,10 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				}
 			}
 
-			serviceName := e.Labels["io.podman.compose.service"]
-			containerNumber := e.Labels["io.podman.compose.container-number"]
-			configFile := e.Labels["io.podman.compose.project.config_files"]
-			workingDir := e.Labels["io.podman.compose.project.working_dir"]
+			serviceName := e.Labels["com.docker.compose.service"]
+			// containerNumber := e.Labels["io.podman.compose.container-number"]
+			configFile := e.Labels["com.docker.compose.project.config_files"]
+			workingDir := e.Labels["com.docker.compose.project.working_dir"]
 
 			if projectName == "" {
 				continue
@@ -515,7 +515,9 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 				Ports:          ports,
 				ComposeProject: projectName,
 				ComposeService: serviceName,
-				ComposeNumber:  containerNumber,
+				// ComposeNumber:  containerNumber,
+				ComposeDirectory:     workingDir,
+				ComposeFileDirectory: (workingDir + "/" + configFile),
 			}
 
 			if state == "running" {
@@ -592,15 +594,17 @@ func FetchComposeProjects() (map[string]*ComposeProject, error) {
 			}
 
 			container := Container{
-				ID:             e.ID,
-				Names:          names,
-				Image:          e.Image,
-				Status:         e.Status,
-				State:          state,
-				Ports:          e.Ports,
-				ComposeProject: projectName,
-				ComposeService: serviceName,
-				ComposeNumber:  containerNumber,
+				ID:                   e.ID,
+				Names:                names,
+				Image:                e.Image,
+				Status:               e.Status,
+				State:                state,
+				Ports:                e.Ports,
+				ComposeProject:       projectName,
+				ComposeService:       serviceName,
+				ComposeNumber:        containerNumber,
+				ComposeDirectory:     labels["com.docker.compose.project.working_dir"],
+				ComposeFileDirectory: labels["com.docker.compose.project.config_files"],
 			}
 
 			if state == "running" {

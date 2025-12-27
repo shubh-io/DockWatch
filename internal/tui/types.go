@@ -29,6 +29,7 @@ type model struct {
 	infoVisible          bool                              // info panel visible?
 	infoPanelHeight      int                               // height of info panel
 	infoContainer        *docker.Container                 // container for info display
+	infoContainerID      string                            // info container ID
 	sortBy               sortColumn                        // which column to sort by
 	sortAsc              bool                              // sort direction
 	columnMode           bool                              // column nav mode (vs row nav)

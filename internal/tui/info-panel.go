@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/shubh-io/dockmate/internal/docker"
 )
 
 func (m model) renderInfoPanel(width int) string {
@@ -11,10 +13,41 @@ func (m model) renderInfoPanel(width int) string {
 	b.WriteString(dividerStyle.Render(strings.Repeat("─", width)))
 	b.WriteString("\n")
 
-	containerName := ""
-	if m.infoContainer != nil && len(m.infoContainer.Names) > 0 {
-		containerName = m.infoContainer.Names[0]
+	id := m.infoContainerID
+	if id == "" && m.infoContainer != nil {
+		id = m.infoContainer.ID
 	}
+
+	var container *docker.Container
+
+	if id != "" {
+
+		for _, p := range m.projects {
+			for i := range p.Containers {
+				if p.Containers[i].ID == id {
+					container = &p.Containers[i]
+					break
+				}
+			}
+			if container != nil {
+				break
+			}
+		}
+		if container == nil {
+			for i := range m.containers {
+				if m.containers[i].ID == id {
+					container = &m.containers[i]
+					break
+				}
+			}
+		}
+	}
+
+	containerName := ""
+	if container != nil && len(container.Names) > 0 {
+		containerName = container.Names[0]
+	}
+
 	infoTitle := fmt.Sprintf("Container Info: %s ", containerName)
 	if visibleLen(infoTitle) < width {
 		infoTitle += strings.Repeat(" ", width-visibleLen(infoTitle))
@@ -22,7 +55,7 @@ func (m model) renderInfoPanel(width int) string {
 	b.WriteString(titleStyle.Render(infoTitle))
 	b.WriteString("\n")
 
-	if m.infoContainer == nil {
+	if container == nil {
 		noContainerMsg := "  No container selected"
 		if visibleLen(noContainerMsg) < width {
 			noContainerMsg += strings.Repeat(" ", width-visibleLen(noContainerMsg))
@@ -32,56 +65,61 @@ func (m model) renderInfoPanel(width int) string {
 		return b.String()
 	}
 
-	c := m.infoContainer
-
 	// Display container information fields
 	infoFields := []struct {
 		label string
 		value string
 	}{
-		{"Container ID", c.ID},
+		{"Container ID", container.ID},
 		{"Name", containerName},
-		{"Image", c.Image},
-		{"Status", c.Status},
-		{"State", c.State},
-		{"CPU Usage", c.CPU},
-		{"Memory Usage", c.Memory},
-		{"Network I/O", c.NetIO},
-		{"Block I/O", c.BlockIO},
-		{"Ports", c.Ports},
+		{"Image", container.Image},
+		{"Status", container.Status},
+		{"State", container.State},
+		{"CPU Usage", container.CPU},
+		{"Memory Usage", container.Memory},
+		{"Network I/O", container.NetIO},
+		{"Block I/O", container.BlockIO},
+		{"Ports", container.Ports},
+		// {"Compose Project", container.ComposeProject},
+		// {"Compose File Directory", container.ComposeFileDirectory},
+		// {"Compose Directory", container.ComposeDirectory},
+		// {"Compose Service", container.ComposeService},
 	}
 
 	// Add compose-specific fields if available
-	if c.ComposeProject != "" {
+	if container.ComposeProject != "" {
 		infoFields = append(infoFields, struct {
 			label string
 			value string
-		}{"Compose Project", c.ComposeProject})
+		}{"Compose Project", container.ComposeProject})
 	}
-	if c.ComposeDirectory != "" {
+	if container.ComposeDirectory != "" {
 		infoFields = append(infoFields, struct {
 			label string
 			value string
-		}{"Compose Directory", c.ComposeDirectory})
+		}{"Compose Directory", container.ComposeDirectory})
 	}
-	if c.ComposeFileDirectory != "" {
+	if container.ComposeFileDirectory != "" {
 		infoFields = append(infoFields, struct {
 			label string
 			value string
-		}{"Compose File Directory", c.ComposeFileDirectory})
+		}{"Compose File Directory", container.ComposeFileDirectory})
 	}
-	if c.ComposeService != "" {
+	if container.ComposeService != "" {
 		infoFields = append(infoFields, struct {
 			label string
 			value string
-		}{"Compose Service", c.ComposeService})
+		}{"Compose Service", container.ComposeService})
+	}
+	panelHeight := m.infoPanelHeight
+	if container != nil && container.ComposeFileDirectory == "" {
+		panelHeight -= 4
 	}
 
-	maxInfoLines := m.infoPanelHeight - 2 // account for divider and title
+	maxInfoLines := panelHeight - 2 // account for divider and title
 	if maxInfoLines < 1 {
 		maxInfoLines = 1
 	}
-
 	// Render info fields with wrapping
 	renderedLines := 0
 	for _, field := range infoFields {

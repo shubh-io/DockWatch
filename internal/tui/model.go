@@ -75,6 +75,7 @@ func InitialModel() model {
 		infoVisible:          false,
 		infoPanelHeight:      INFO_PANEL_HEIGHT,
 		infoContainer:        nil,
+		infoContainerID:      "",
 		sortBy:               sortByStatus,
 		sortAsc:              false, // descending
 		columnMode:           false,
@@ -178,7 +179,12 @@ func (m *model) calculateMaxContainers() int {
 		availableHeight -= m.logPanelHeight
 	}
 	if m.infoVisible {
-		availableHeight -= INFO_PANEL_HEIGHT
+		// if compose file dir visible:
+		if m.infoContainer != nil && m.infoContainer.ComposeFileDirectory != "" {
+			availableHeight -= INFO_PANEL_HEIGHT
+		} else {
+			availableHeight -= (INFO_PANEL_HEIGHT - 4)
+		}
 	}
 	maxContainers := availableHeight / CONTAINER_ROW_HEIGHT
 	if maxContainers < 1 {
@@ -194,17 +200,25 @@ func (m *model) updatePagination() {
 		m.maxContainersPerPage = 1
 	}
 
-	if len(m.containers) == 0 {
+	itemCount := len(m.containers)
+	if m.composeViewMode {
+		itemCount = len(m.flatList)
+	}
+
+	if itemCount == 0 {
 		m.cursor = 0
 		m.page = 0
 		return
 	}
 
-	if m.cursor >= len(m.containers) {
-		m.cursor = len(m.containers) - 1
+	if m.cursor >= itemCount {
+		m.cursor = itemCount - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
 	}
 
-	maxPage := (len(m.containers) - 1) / m.maxContainersPerPage
+	maxPage := (itemCount - 1) / m.maxContainersPerPage
 	if maxPage < 0 {
 		maxPage = 0
 	}
@@ -221,7 +235,7 @@ func (m *model) updatePagination() {
 
 	// keep persistent page indicator up-to-date
 	if m.maxContainersPerPage > 0 {
-		maxPage = (len(m.containers) - 1) / m.maxContainersPerPage
+		maxPage = (itemCount - 1) / m.maxContainersPerPage
 		if maxPage < 0 {
 			maxPage = 0
 		}
@@ -268,7 +282,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.containers) {
 			m.cursor = max(0, len(m.containers)-1)
 		}
-
 		m.refreshInfoContainer()
 
 		m.updatePagination()
@@ -782,7 +795,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, Keys.Down):
 				if !m.columnMode {
 					if m.composeViewMode {
-						if len(m.flatList) > 0 {
+						if m.cursor < len(m.flatList)-1 {
 							m.moveCursorDownTree()
 						}
 					} else {
@@ -970,10 +983,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.infoVisible = !m.infoVisible
 					if m.infoVisible {
 						m.infoContainer = selected
+						m.infoContainerID = selected.ID
 						m.currentMode = modeInfo
-						m.statusMessage = "Showing container info"
+						// m.statusMessage = "Showing container info"
 					} else {
 						m.infoContainer = nil
+						m.infoContainerID = ""
 						m.currentMode = modeNormal
 						m.statusMessage = "Info panel closed"
 					}
