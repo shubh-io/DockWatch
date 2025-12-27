@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh |
 
 ## 🚀 Key Features
 
-DockMate is the `htop` for Docker—lightweight, keyboard-driven, and zero-config.
+DockMate is the `htop` for Docker-lightweight, keyboard-driven, and zero-config.
 
 * **⚡ Real-time Monitoring:** Stats for CPU, Memory, Disk I/O, Network, etc.
 * **⌨️ Instant Control:** Start (`s`), Stop (`x`), Restart (`r`), and Remove (`d`) containers with single keystrokes.
@@ -165,9 +165,9 @@ Settings are saved to `~/.config/dockmate/config.yml`. You can manually edit thi
 | Feature | DockMate | LazyDocker |
 | :--- | :--- | :--- |
 | **Philosophy** | ⚡ **Speed & Simplicity** | 🧰 Feature-rich Power User |
-| **Engine Support** | ✅ **Docker + Podman (Native)** | ⚠️ Docker (Podman via hack) |
+| **Engine Support** | ✅ **Docker + Podman (Native)** | ⚠️ Docker (Podman via workaround) |
 | **Performance** | 🚀 **Instant (<2s) / Minimal Deps** | 🐢 Variable / Heavy Deps |
-| **Tech Stack** | 🆕 **Bubble Tea (Modern)** | 👴 gocui (Legacy) |
+| **Tech Stack** | 🆕 **Bubble Tea (Modern)** | 👴 gocui (Legacy, old) |
 | **Maintenance** | 🔄 **Built-in (`dockmate update`)** | ❌ Manual updates |
 | **Input & UI** | ⌨️ **Keyboard-only / Text-based** | 🖱️ Mouse + Key / ASCII Graphs |
 | **Scope** | 🎯 **Containers & Compose** | 📦 Containers + Images + Layers |
