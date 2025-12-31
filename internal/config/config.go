@@ -43,8 +43,9 @@ type PerformanceConfig struct {
 }
 
 type RuntimeConfig struct {
-	Type   string `yaml:"type"`   // "docker" or "podman"
-	Socket string `yaml:"socket"` // custom socket path (would add in future)
+	Type         string `yaml:"type"`   // "docker" or "podman"
+	Socket       string `yaml:"socket"` // custom socket path (would add in future)
+	RunPreChecks bool   `yaml:"run_pre_checks"`
 }
 
 type ExecConfig struct {
@@ -90,7 +91,8 @@ func DefaultConfig() *Config {
 		Runtime: RuntimeConfig{
 			Type: "docker",
 			// optional, would add support later for custom sockets
-			Socket: "",
+			Socket:       "",
+			RunPreChecks: true,
 		},
 		Exec: ExecConfig{
 			Shell: "/bin/sh",
@@ -133,7 +135,7 @@ func Load() (*Config, error) {
 	}
 
 	// Parse YAML
-	cfg := &Config{}
+	cfg := DefaultConfig()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		// If YAML is invalid, return default config
 		return DefaultConfig(), nil

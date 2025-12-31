@@ -37,6 +37,14 @@ const (
 	PodmanServiceNotRunning
 )
 
+func isPrecheckEnabled() bool {
+	cfg, err := config.Load()
+	if err != nil {
+		return true // default to true if error loading config
+	}
+	return cfg.Runtime.RunPreChecks
+}
+
 // Runtime Selection
 
 // checks if the runtime is properly configured
@@ -54,7 +62,10 @@ func isRuntimeConfigured() bool {
 	}
 
 	// Load the config (should succeed if it exists)
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return false
+	}
 	runtimeType := strings.TrimSpace(strings.ToLower(cfg.Runtime.Type))
 	return (runtimeType == "docker" || runtimeType == "podman") && runtimeType != "" && runtimeType != "auto"
 }
@@ -496,6 +507,7 @@ func isDaemonRunning() bool {
 }
 
 func RunPreChecks() PreCheckResult {
+
 	// Check - Is runtime configured? If not, prompt user
 	if !isRuntimeConfigured() {
 		err := promptRuntimeSelection()
@@ -509,36 +521,58 @@ func RunPreChecks() PreCheckResult {
 		}
 	}
 
-	cfg, _ := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return PreCheckResult{
+			Passed:          false,
+			ErrorType:       NoError,
+			ErrorMessage:    fmt.Sprintf("Failed to load config: %v", err),
+			SuggestedAction: "Try running:\n  dockmate --runtime\n\nOr delete your config file and try again:\n  rm ~/.config/dockmate/config.yml",
+		}
+	}
+
 	runtimeType := strings.TrimSpace(strings.ToLower(cfg.Runtime.Type))
 	if runtimeType == "" {
 		runtimeType = "docker"
 	}
 
+	errorChangeRuntimeSuggestion := func(str string) string {
+		changeRuntimeSuggestion := "\n\nOr If you want to Change the runtime to " + str + ", run: \n dockmate --runtime \n"
+		return changeRuntimeSuggestion
+	}
+
 	switch runtimeType {
 	case "podman":
-		result := checkPodmanInstalled()
-		if !result.Passed {
-			result.SuggestedAction += "\n\nOr If you want to Change the runtime to docker, run: \n dockmate --runtime \n"
-			return result
+		// 1. Check if installed first
+		if cfg.Runtime.RunPreChecks {
+			result := checkPodmanInstalled()
+			if !result.Passed {
+				result.SuggestedAction += errorChangeRuntimeSuggestion("docker")
+				return result
+			}
 		}
 
-		result = checkPodmanService()
+		// 2. Check Service/Daemon
+		result := checkPodmanService()
 		if !result.Passed {
-			result.SuggestedAction += "\n\nOr If you want to Change the runtime to docker, run: \n dockmate --runtime \n"
+			result.SuggestedAction += errorChangeRuntimeSuggestion("docker")
 			return result
 		}
 
 	case "docker", "auto":
-		result := checkDockerInstalled()
-		if !result.Passed {
-			result.SuggestedAction += "\n\nOr If you want to Change the runtime to podman, run: \n dockmate --runtime \n"
-			return result
+		// 1. Check if installed first
+		if cfg.Runtime.RunPreChecks {
+			result := checkDockerInstalled()
+			if !result.Passed {
+				result.SuggestedAction += errorChangeRuntimeSuggestion("podman")
+				return result
+			}
 		}
 
-		result = checkDockerDaemon()
+		// 2. Check Daemon
+		result := checkDockerDaemon()
 		if !result.Passed {
-			result.SuggestedAction += "\n\nOr If you want to Change the runtime to podman, run: \n dockmate --runtime \n"
+			result.SuggestedAction += errorChangeRuntimeSuggestion("podman")
 			return result
 		}
 
@@ -551,5 +585,11 @@ func RunPreChecks() PreCheckResult {
 		}
 	}
 
+	// save to config that prechecks have passed (if needed in future)
+	cfg.Runtime.RunPreChecks = false
+	if err := cfg.Save(); err != nil {
+		// log but don't fail prechecks
+		fmt.Fprintf(os.Stderr, "Warning: failed to save config after prechecks: %v\n", err)
+	}
 	return PreCheckResult{Passed: true}
 }

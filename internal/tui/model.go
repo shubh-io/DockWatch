@@ -724,6 +724,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					if runtimeChanged {
 						m.statusMessage = "Settings saved! Restarting app..."
+
+						cfg.Runtime.RunPreChecks = true
+						if err := cfg.Save(); err != nil {
+							// log but don't fail prechecks
+							fmt.Fprintf(os.Stderr, "Warning: failed to save config after prechecks: %v\n", err)
+						}
+
 						// Create restart marker file so our app can detect and restart
 						markerPath := filepath.Join(os.TempDir(), ".dockmate_restart")
 						os.WriteFile(markerPath, []byte{}, 0644)
