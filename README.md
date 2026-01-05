@@ -112,6 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh |
 DockMate is the `htop` for Docker-lightweight, keyboard-driven, and zero-config.
 
 * **⚡ Real-time Monitoring:** Stats for CPU, Memory, Disk I/O, Network, etc.
+* **📦 Compose Management:** Full lifecycle control for Docker Compose and Podman Compose projects.
 * **⌨️ Instant Control:** Start (`s`), Stop (`x`), Restart (`r`), and Remove (`d`) containers with single keystrokes.
 * **🔍 Debugging:** View logs (`l`) or spawn an interactive shell (`e`) instantly.
 * **🐳 Multi-Runtime:** Native support for **Docker** and **Podman**.
@@ -125,9 +126,12 @@ DockMate is the `htop` for Docker-lightweight, keyboard-driven, and zero-config.
 
 ---
 
+
 ## ⌨️ Controls
 
 Run `dockmate` to start.
+
+### Navigation & Global
 
 | Key | Action |
 | --- | --- |
@@ -135,14 +139,30 @@ Run `dockmate` to start.
 | `←/→` or `h/l` | Navigate pages |
 | `Tab` | Toggle column selection mode |
 | `Enter` | Sort by selected column |
-| `s` / `x` / `r` | **S**tart / **S**top / **R**estart container |
-| `d` | **D**elete container |
-| `e` | Open interactive shell (**E**xec) |
 | `l` / `i` / `c` | Toggle **L**ogs / **I**nfo / **C**ompose view |
 | `F1` | Help Menu |
 | `F2` | Settings |
 | `Esc` / `q` | Back / Quit |
 
+### Container Actions (Single)
+
+| Key | Action |
+| --- | --- |
+| `s` | **S**tart container |
+| `x` | Stop container (E**x**it) |
+| `r` | **R**estart container |
+| `d` | **D**elete container |
+| `e` | Open interactive shell (**E**xec) |
+
+### Compose Project Actions (Grouped)
+
+| Key | Action |
+| --- | --- |
+| `u` / `U` | **U**p (Create & Start all services) |
+| `x` / `X` | Stop all services |
+| `r` / `R` | **R**estart entire project |
+| `p` / `P` | **P**ause / Unpause project |
+| `d` / `D` | **D**own (Stop & Remove containers/networks) |
 
 ---
 
@@ -183,6 +203,7 @@ Settings are saved to `~/.config/dockmate/config.yml`. You can manually edit thi
 ## 🗺️ Roadmap
 
 * [x] Docker Compose integration
+* [x] Docker Compose management
 * [x] Podman Support
 * [x] Homebrew distribution
 * [ ] Container search / filter
