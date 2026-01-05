@@ -136,7 +136,7 @@ Run `dockmate` to start.
 | Key | Action |
 | --- | --- |
 | `↑/↓` or `j/k` | Move cursor up/down |
-| `←/→` or `h/l` | Navigate pages |
+| `←/→`| Navigate pages |
 | `Tab` | Toggle column selection mode |
 | `Enter` | Sort by selected column |
 | `l` / `i` / `c` | Toggle **L**ogs / **I**nfo / **C**ompose view |
