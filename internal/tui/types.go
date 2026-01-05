@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/shubh-io/dockmate/internal/docker"
 )
 
@@ -26,6 +27,8 @@ type model struct {
 	logPanelHeight       int                               // height of logs panel
 	logsLines            []string                          // log lines
 	logsContainer        string                            // container id for logs
+	logsIsProject        bool                              // true if logsContainer refers to a compose project
+	logsWorkingDir       string                            // working directory for compose project logs
 	infoVisible          bool                              // info panel visible?
 	infoPanelHeight      int                               // height of info panel
 	infoContainer        *docker.Container                 // container for info display
@@ -42,6 +45,10 @@ type model struct {
 	composeViewMode  bool
 	suspendRefresh   bool
 	settingsSelected int
+
+	// confirmation
+	confirmMessage string
+	pendingAction  func() tea.Cmd
 }
 
 // treeRow represents a row in the flattened tree
@@ -100,6 +107,7 @@ const (
 	modeSettings
 	modeComposeView
 	modeHelp
+	modeConfirmation
 )
 
 type actionDoneMsg struct {

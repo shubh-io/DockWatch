@@ -327,10 +327,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = fmt.Sprintf("Logs error: %v", msg.Err)
 			m.logsLines = nil
 			m.logsVisible = false
+			m.logsIsProject = false
+			m.logsWorkingDir = ""
 		} else {
 			m.logsLines = msg.Lines
 			m.logsContainer = msg.ID
 			m.logsVisible = true
+
+			if _, ok := m.projects[msg.ID]; ok {
+				m.logsIsProject = true
+			} else {
+				m.logsIsProject = false
+			}
 		}
 		m.updatePagination()
 		return m, nil
@@ -351,6 +359,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tickCmd(time.Duration(m.settings.RefreshInterval) * time.Second)
 		}
 		if m.logsVisible && m.logsContainer != "" {
+			if m.logsIsProject {
+				return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second), fetchComposeLogsCmd(m.logsContainer, m.logsWorkingDir))
+			}
 			return m, tea.Batch(fetchContainers(), tickCmd(time.Duration(m.settings.RefreshInterval)*time.Second), fetchLogsCmd(m.logsContainer))
 		}
 		if m.composeViewMode {
@@ -381,6 +392,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentMode = modeNormal
 				m.updatePagination()
 				m.statusMessage = "Logs closed"
+				m.logsIsProject = false
+				m.logsWorkingDir = ""
 				return m, nil
 			}
 			if m.infoVisible {
@@ -486,33 +499,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "l", "L":
 
-			var containerID string
 			if m.infoVisible {
 				return m, nil
 			}
-			if m.composeViewMode {
-				if m.cursor < len(m.flatList) && !m.flatList[m.cursor].isProject {
-					containerID = m.flatList[m.cursor].container.ID
+
+			// If logs are already visible, toggle them off immediately.
+			if m.logsVisible {
+				m.logsVisible = false
+				m.currentMode = modeNormal
+				m.updatePagination()
+				m.statusMessage = "Logs closed"
+				m.logsIsProject = false
+				m.logsWorkingDir = ""
+				return m, nil
+			}
+
+			var containerID string
+			if m.composeViewMode && m.cursor < len(m.flatList) {
+				row := m.flatList[m.cursor]
+				if row.isProject {
+					proj, dir := m.getSelectedProject()
+					if proj != "" {
+						m.statusMessage = fmt.Sprintf("Fetching logs for project %s...", proj)
+						m.logsVisible = true
+						m.logsIsProject = true
+						m.logsWorkingDir = dir
+						m.currentMode = modeLogs
+						m.updatePagination()
+						return m, fetchComposeLogsCmd(proj, dir)
+					}
+				}
+
+				if !row.isProject && row.container != nil {
+					containerID = row.container.ID
 				}
 			} else {
 				if len(m.containers) > 0 {
 					containerID = m.containers[m.cursor].ID
 				}
 			}
+
 			if containerID != "" {
-				if m.logsVisible {
-					m.logsVisible = false
-					m.currentMode = modeNormal
-					m.statusMessage = "Logs closed"
-					m.updatePagination()
-				} else {
-					m.logsVisible = true
-					m.currentMode = modeLogs
-					m.statusMessage = "Fetching logs..."
-					m.updatePagination()
-					return m, fetchLogsCmd(containerID)
-				}
+				m.logsVisible = true
+				m.currentMode = modeLogs
+				m.statusMessage = "Fetching logs..."
+				m.updatePagination()
+				return m, fetchLogsCmd(containerID)
 			}
+
 			return m, nil
 
 		case "enter":
@@ -607,6 +641,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+
+		if m.currentMode == modeConfirmation {
+			switch msg.String() {
+			case "y", "Y":
+				m.currentMode = modeComposeView
+				m.suspendRefresh = false
+				m.statusMessage = "Action confirmed"
+				if m.pendingAction != nil {
+					cmd := m.pendingAction()
+					m.pendingAction = nil
+					return m, cmd
+				}
+				return m, nil
+			case "n", "N", "esc", "q":
+				m.currentMode = modeComposeView
+				m.suspendRefresh = false
+				m.statusMessage = "Action cancelled"
+				m.pendingAction = nil
+				return m, nil
+			}
+			return m, nil
+		}
+
 		if m.currentMode == modeHelp {
 			switch msg.String() {
 			case "esc", "f1", "q":
@@ -777,6 +834,89 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, Keys.Quit):
 				return m, tea.Quit
 
+			case key.Matches(msg, Keys.ComposeUp) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					m.confirmMessage = fmt.Sprintf("ARE YOU SURE you want to START compose project %q?", proj)
+					m.pendingAction = func() tea.Cmd {
+						m.statusMessage = fmt.Sprintf("Starting project %s...", proj)
+						return composeActionCmd("up", proj, dir)
+					}
+					m.currentMode = modeConfirmation
+					return m, nil
+				}
+
+			case key.Matches(msg, Keys.ComposeDown) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					m.confirmMessage = fmt.Sprintf("ARE YOU SURE you want to BRING DOWN compose project %q?", proj)
+					m.pendingAction = func() tea.Cmd {
+						m.statusMessage = fmt.Sprintf("Stopping project %s...", proj)
+						return composeActionCmd("down", proj, dir)
+					}
+					m.currentMode = modeConfirmation
+					return m, nil
+				}
+
+			case key.Matches(msg, Keys.ComposeRestart) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					m.confirmMessage = fmt.Sprintf("ARE YOU SURE you want to RESTART compose project %q?", proj)
+					m.pendingAction = func() tea.Cmd {
+						m.statusMessage = fmt.Sprintf("Restarting project %s...", proj)
+						return composeActionCmd("restart", proj, dir)
+					}
+					m.currentMode = modeConfirmation
+					return m, nil
+				}
+
+			case key.Matches(msg, Keys.ComposePause) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					action := "unpause"
+					if p, ok := m.projects[proj]; ok {
+						for _, c := range p.Containers {
+							if strings.ToLower(c.State) == "running" {
+								action = "pause"
+								break
+							}
+						}
+					}
+					m.confirmMessage = fmt.Sprintf("ARE YOU SURE you want to %s compose project %q?", strings.ToUpper(action), proj)
+					m.pendingAction = func() tea.Cmd {
+						m.statusMessage = fmt.Sprintf("%s project %s...", strings.Title(action), proj)
+						return composeActionCmd(action, proj, dir)
+					}
+					m.currentMode = modeConfirmation
+					return m, nil
+				}
+
+			case key.Matches(msg, Keys.Logs) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					m.statusMessage = fmt.Sprintf("Fetching logs for project %s...", proj)
+					m.logsVisible = true
+					m.logsIsProject = true
+					m.logsWorkingDir = dir
+					m.currentMode = modeLogs
+					m.updatePagination()
+					return m, fetchComposeLogsCmd(proj, dir)
+
+				}
+
+				m.statusMessage = "No compose project selected"
+
+			case key.Matches(msg, Keys.ComposeStop) && m.isProjectSelected():
+				proj, dir := m.getSelectedProject()
+				if proj != "" {
+					m.confirmMessage = fmt.Sprintf("ARE YOU SURE you want to stop all containers in compose project %q?", proj)
+					m.pendingAction = func() tea.Cmd {
+						m.statusMessage = fmt.Sprintf("Stopping project %s...", proj)
+						return composeActionCmd("stop", proj, dir)
+					}
+					m.currentMode = modeConfirmation
+					return m, nil
+				}
 			case key.Matches(msg, Keys.Up):
 				if !m.columnMode {
 					if m.composeViewMode {
@@ -912,6 +1052,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Manually refresh container list
 				m.loading = true
 				m.logsVisible = false
+				m.logsIsProject = false
+				m.logsWorkingDir = ""
 				m.infoVisible = false
 				m.infoContainer = nil
 				m.updatePagination()
@@ -1089,6 +1231,10 @@ func (m model) View() string {
 		return m.renderHelp(m.terminalWidth)
 	}
 
+	if m.currentMode == modeConfirmation {
+		return m.renderConfirmation(m.terminalWidth)
+	}
+
 	var b strings.Builder
 
 	// Ensure minimum width
@@ -1200,7 +1346,7 @@ func (m model) View() string {
 	}
 
 	// highlight selected column in column mode
-	highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("#58cdffff")).Foreground(lipgloss.Color("#000000")).Bold(true)
+	highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("#58cdff")).Foreground(lipgloss.Color("#000000")).Bold(true)
 
 	// buildColumn builds a complete cell with spacing, padding, and title
 	buildColumn := func(columnIndex int, title string, width int, indicator string) string {
@@ -1814,4 +1960,43 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+func (m model) renderConfirmation(width int) string {
+	dialogWidth := 60
+	dialogHeight := 6
+
+	padLeft := (width - dialogWidth) / 2
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	padTop := (m.terminalHeight - dialogHeight) / 2
+	if padTop < 0 {
+		padTop = 0
+	}
+
+	var b strings.Builder
+
+	for i := 0; i < padTop; i++ {
+		b.WriteString("\n")
+	}
+
+	dialogStyle := lipgloss.NewStyle().
+		Width(dialogWidth).
+		Height(dialogHeight).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#F59E0B")). // Yellow/Warning
+		Padding(1, 2).
+		Align(lipgloss.Center)
+
+	content := fmt.Sprintf("%s\n\n(y/n)", m.confirmMessage)
+
+	dialog := dialogStyle.Render(content)
+
+	lines := strings.Split(dialog, "\n")
+	for _, line := range lines {
+		b.WriteString(strings.Repeat(" ", padLeft) + line + "\n")
+	}
+
+	return b.String()
 }

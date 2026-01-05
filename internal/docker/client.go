@@ -422,6 +422,117 @@ func DoAction(action, containerID string) error {
 	return cmd.Run()
 }
 
+type ComposeCommand struct {
+	Binary     string
+	SubCommand string
+}
+
+func GetComposeCommand() ComposeCommand {
+	if runtimeBin() == "docker" {
+
+		if path, err := exec.LookPath("docker"); err == nil {
+			if err := exec.Command(path, "compose", "version").Run(); err == nil {
+				return ComposeCommand{Binary: "docker", SubCommand: "compose"}
+			}
+		}
+		if path, err := exec.LookPath("docker-compose"); err == nil {
+			return ComposeCommand{Binary: path, SubCommand: ""}
+		}
+
+	} else {
+		if path, err := exec.LookPath("podman-compose"); err == nil {
+			return ComposeCommand{Binary: path, SubCommand: ""}
+		}
+
+		if path, err := exec.LookPath("podman"); err == nil {
+			return ComposeCommand{Binary: path, SubCommand: "compose"}
+		}
+	}
+
+	return ComposeCommand{Binary: "docker", SubCommand: "compose"}
+}
+
+func RunComposeAction(action, project, workingDir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	cmdConfig := GetComposeCommand()
+
+	var args []string
+	if cmdConfig.SubCommand != "" {
+		args = append(args, cmdConfig.SubCommand)
+	}
+
+	if project != "" {
+		args = append(args, "-p", project)
+	}
+
+	args = append(args, action)
+
+	switch action {
+	case "up":
+		args = append(args, "-d")
+	case "logs":
+		args = append(args, "--tail", "20")
+	}
+
+	cmd := exec.CommandContext(ctx, cmdConfig.Binary, args...)
+
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+
+		return fmt.Errorf("compose error (%s %s): %v\nOutput: %s", cmdConfig.Binary, action, err, string(output))
+	}
+
+	return nil
+}
+
+// GetComposeLogs runs `compose logs` for a given project and returns the output lines
+func GetComposeLogs(project, workingDir string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmdConfig := GetComposeCommand()
+	var args []string
+	if cmdConfig.SubCommand != "" {
+		args = append(args, cmdConfig.SubCommand)
+	}
+	if project != "" {
+		args = append(args, "-p", project)
+	}
+	args = append(args, "logs", "--tail", "15")
+
+	cmd := exec.CommandContext(ctx, cmdConfig.Binary, args...)
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// return output even on error to give the caller something to show
+		lines := []string{}
+		for _, l := range strings.Split(string(output), "\n") {
+			if s := strings.TrimSpace(l); s != "" {
+				lines = append(lines, s)
+			}
+		}
+		return lines, fmt.Errorf("compose logs error: %v\nOutput: %s", err, string(output))
+	}
+
+	lines := []string{}
+	for _, l := range strings.Split(string(output), "\n") {
+		if s := strings.TrimSpace(l); s != "" {
+			lines = append(lines, s)
+		}
+	}
+
+	return lines, nil
+}
+
 // FetchComposeProjects fetches all Docker/Podman Compose projects with their containers
 
 func FetchComposeProjects() (map[string]*ComposeProject, error) {

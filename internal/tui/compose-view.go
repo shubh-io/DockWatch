@@ -103,6 +103,9 @@ func (m model) renderTreeRow(row treeRow, selected bool, idW, nameW, memoryW, cp
 
 		// Project row style
 		projectStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
+		if selected {
+			return selectedStyle.Render(projectLabel)
+		}
 		return projectStyle.Render(projectLabel)
 	}
 
@@ -244,21 +247,8 @@ func (m *model) moveCursorUpTree() {
 		m.cursor = 0
 		return
 	}
-	i := m.cursor - 1
-	for i >= 0 && m.flatList[i].isProject {
-		i--
-	}
-	if i >= 0 {
-		m.cursor = i
-	} else {
-		// clamp to first non-project if any
-		for j := 0; j < len(m.flatList); j++ {
-			if !m.flatList[j].isProject {
-				m.cursor = j
-				return
-			}
-		}
-		m.cursor = 0
+	if m.cursor > 0 {
+		m.cursor--
 	}
 }
 
@@ -267,21 +257,8 @@ func (m *model) moveCursorDownTree() {
 		m.cursor = 0
 		return
 	}
-	i := m.cursor + 1
-	for i < len(m.flatList) && m.flatList[i].isProject {
-		i++
-	}
-	if i < len(m.flatList) {
-		m.cursor = i
-	} else {
-		// clamp to last non-project if any
-		for j := len(m.flatList) - 1; j >= 0; j-- {
-			if !m.flatList[j].isProject {
-				m.cursor = j
-				return
-			}
-		}
-		m.cursor = len(m.flatList) - 1
+	if m.cursor < len(m.flatList)-1 {
+		m.cursor++
 	}
 }
 
@@ -329,4 +306,36 @@ func (m *model) refreshInfoContainer() {
 			}
 		}
 	}
+}
+
+func (m *model) getSelectedProject() (string, string) {
+	if !m.composeViewMode || len(m.flatList) == 0 {
+		return "", ""
+	}
+	if m.cursor >= len(m.flatList) {
+		return "", ""
+	}
+	row := m.flatList[m.cursor]
+	projectName := row.projectName
+	if !row.isProject {
+		if row.container != nil {
+			projectName = row.container.ComposeProject
+		}
+	}
+
+	if projectName == "" || projectName == "Standalone Containers" {
+		return "", ""
+	}
+
+	if proj, ok := m.projects[projectName]; ok {
+		return projectName, proj.WorkingDir
+	}
+	return projectName, ""
+}
+
+func (m *model) isProjectSelected() bool {
+	if !m.composeViewMode || len(m.flatList) == 0 || m.cursor >= len(m.flatList) {
+		return false
+	}
+	return m.flatList[m.cursor].isProject
 }

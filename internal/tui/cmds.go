@@ -45,10 +45,24 @@ func doAction(action, containerID string) tea.Cmd {
 	}
 }
 
+func composeActionCmd(action, project, workingDir string) tea.Cmd {
+	return func() tea.Msg {
+		err := docker.RunComposeAction(action, project, workingDir)
+		return actionDoneMsg{err: err}
+	}
+}
+
 // fetch logs for a container
 func fetchLogsCmd(id string) tea.Cmd {
 	return func() tea.Msg {
 		lines, err := docker.GetLogs(id)
 		return docker.LogsMsg{ID: id, Lines: lines, Err: err}
+	}
+}
+
+func fetchComposeLogsCmd(project, workingDir string) tea.Cmd {
+	return func() tea.Msg {
+		lines, err := docker.GetComposeLogs(project, workingDir)
+		return docker.LogsMsg{ID: project, Lines: lines, Err: err}
 	}
 }
