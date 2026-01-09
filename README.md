@@ -105,8 +105,41 @@ curl -fsSL https://raw.githubusercontent.com/shubh-io/DockMate/main/install.sh |
 </details>
 
 
----
+<details>
+<summary><b>Click for Troubleshooting Guide❗</b></summary>
 
+## Troubleshooting
+
+### "Permission Denied" when running Compose actions
+If the app fails to enter a directory, it is likely a filesystem permission mismatch between your current user and the project folder.
+
+#### Symptoms
+You see an error similar to this in the logs or terminal:
+> `Error: compose error (docker up): chdir /home/dockertest/my-app: permission denied`
+
+#### The Fix
+Ensure your user has ownership of the project directory.
+
+**Example Case:**
+If your project is located at `~/path/to-your-folder/`, run:
+
+```bash
+# Replace '~/path/to-your-folder/' with your actual project path
+sudo chown -R $USER:$USER ~/path/to-your-folder/
+
+```
+
+**Technical Note:**
+This command recursively (`-R`) changes the owner to your current logged-in user (`$USER`). This grants **DockMate** the necessary permissions to execute compose commands within that directory.
+
+</details>
+
+
+
+
+
+
+---
 ## 🚀 Key Features
 
 DockMate is the `htop` for Docker-lightweight, keyboard-driven, and zero-config.
